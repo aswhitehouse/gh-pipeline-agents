@@ -1,0 +1,56 @@
+name: Test Failure Workflow
+
+on:
+  workflow_dispatch:  # Manual trigger
+  push:
+    branches: [main]
+    paths: ['test-failure.yml']  # Only trigger when this file changes
+
+jobs:
+  test-build-failure:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          
+      - name: Install dependencies (will fail)
+        run: |
+          echo "Attempting to install dependencies from non-existent package.json..."
+          npm install
+          
+  test-python-failure:
+    runs-on: ubuntu-latest
+    needs: test-build-failure  # This will be skipped if first job fails
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          
+      - name: Run failing test
+        run: |
+          echo "Running a test that will definitely fail..."
+          python -c "import nonexistent_module"
+          
+  test-lint-failure:
+    runs-on: ubuntu-latest
+    needs: test-python-failure
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Run failing lint check
+        run: |
+          echo "Running lint check that will fail..."
+          # Create a file with obvious lint errors
+          echo "def bad_function(  ): return None" > bad_code.py
+          echo "This line has no proper syntax" >> bad_code.py
+          python -m py_compile bad_code.py  # This will fail 

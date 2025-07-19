@@ -1,9 +1,9 @@
 # .github/workflows/error-analysis.yml
-name: DACP Error Analysis
+name: GitHub Actions Error Analysis
 
 on:
   workflow_run:
-    workflows: ["CI", "Build", "Test", "Lint", "Deploy"]
+    workflows: ["CI", "Build", "Test", "Lint", "Deploy", "Test Failure Workflow"]
     types: [completed]
 
 jobs:
@@ -11,8 +11,14 @@ jobs:
     if: ${{ github.event.workflow_run.conclusion == 'failure' }}
     runs-on: ubuntu-latest
     
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+      issues: write
+    
     steps:
-      - name: Checkout agents repo
+      - name: Checkout repository
         uses: actions/checkout@v4
         
       - name: Set up Python
@@ -20,20 +26,103 @@ jobs:
         with:
           python-version: '3.11'
           
-      - name: Install DACP
-        run: pip install dacp[openai]
-        
-      - name: Get workflow logs
-        id: get-logs
+      - name: Install dependencies
         run: |
-          gh run download ${{ github.event.workflow_run.id }} --log
-          echo "logs=$(cat 0_build.txt 2>/dev/null || cat 0_test.txt 2>/dev/null || cat 0_lint.txt 2>/dev/null || echo 'No specific log file found')" >> $GITHUB_OUTPUT
+          pip install dacp
+          # Install agent dependencies
+          pip install -r agents/github-actions-error-collector/requirements.txt
+          pip install -r agents/github-actions-error-analyzer/requirements.txt
+        
+      - name: Get failed workflow logs
+        id: get-logs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Get information about the failed workflow
+          echo "Analyzing workflow run ${{ github.event.workflow_run.id }}"
           
-      - name: Run DACP analysis
+          # Get failed jobs only (more efficient than downloading all logs)
+          echo "Getting failed job information..."
+          FAILED_JOBS=$(gh run view ${{ github.event.workflow_run.id }} \
+            --repo ${{ github.repository }} \
+            --json jobs \
+            --jq '.jobs[] | select(.conclusion == "failure") | .name' || echo "")
+          
+          echo "Failed jobs: $FAILED_JOBS"
+          
+          if [ -z "$FAILED_JOBS" ]; then
+            echo "No specific failed jobs found, downloading minimal logs..."
+            RAW_LOGS="Workflow failed but no specific job failures detected. Workflow: ${{ github.event.workflow_run.name }}, Branch: ${{ github.event.workflow_run.head_branch }}, Commit: ${{ github.event.workflow_run.head_sha }}"
+          else
+            # Create logs directory
+            mkdir -p workflow-logs
+            
+            # Download logs (GitHub CLI downloads all, but we'll filter efficiently)
+            echo "Downloading logs for failed workflow..."
+            gh run download ${{ github.event.workflow_run.id }} \
+              --repo ${{ github.repository }} \
+              --dir workflow-logs 2>/dev/null || true
+            
+            # Process logs more efficiently - focus on error patterns
+            echo "Extracting error information from logs..."
+            RAW_LOGS=""
+            
+            # Look for common error patterns and failed job logs
+            find workflow-logs -name "*.txt" -type f | head -10 | while read -r logfile; do
+              # Only process files that likely contain errors
+              if grep -l -i "error\|fail\|exception\|fatal\|panic\|abort" "$logfile" >/dev/null 2>&1; then
+                echo "=== ERRORS FROM: $(basename "$logfile") ===" >> error-logs.txt
+                # Extract lines around errors (more focused)
+                grep -B 3 -A 3 -i "error\|fail\|exception\|fatal" "$logfile" | head -100 >> error-logs.txt 2>/dev/null || true
+                echo -e "\n" >> error-logs.txt
+              fi
+            done
+            
+            # If no error patterns found, get last part of logs (likely where failures occur)
+            if [ ! -f error-logs.txt ]; then
+              echo "No obvious error patterns found, getting log tails..."
+              find workflow-logs -name "*.txt" -type f | head -5 | while read -r logfile; do
+                echo "=== TAIL OF: $(basename "$logfile") ===" >> error-logs.txt
+                tail -50 "$logfile" >> error-logs.txt 2>/dev/null || true
+                echo -e "\n" >> error-logs.txt
+              done
+            fi
+            
+            # Read processed logs
+            if [ -f error-logs.txt ]; then
+              RAW_LOGS=$(cat error-logs.txt)
+            else
+              RAW_LOGS="Failed to extract error information from logs"
+            fi
+          fi
+          
+          # Limit output size (GitHub Actions variable limit)
+          MAX_SIZE=30000  # Reduced from 50000 for safety
+          if [ ${#RAW_LOGS} -gt $MAX_SIZE ]; then
+            echo "logs=${RAW_LOGS:0:$MAX_SIZE}... [TRUNCATED - Original size: ${#RAW_LOGS} chars]" >> $GITHUB_OUTPUT
+            echo "Log truncated due to size (${#RAW_LOGS} > $MAX_SIZE chars)"
+          else
+            echo "logs<<EOF" >> $GITHUB_OUTPUT
+            echo "$RAW_LOGS" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+            echo "Log extraction completed (${#RAW_LOGS} chars)"
+          fi
+          
+      - name: Run DACP error analysis
+        id: analysis
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          dacp run workflow workflows/github-actions-error-workflow.yaml \
+          echo "Running DACP error analysis..."
+          
+          # Get PR number if available
+          PR_NUMBER=""
+          if [ "${{ github.event.workflow_run.event }}" = "pull_request" ] && [ -n "${{ github.event.workflow_run.pull_requests[0].number }}" ]; then
+            PR_NUMBER="${{ github.event.workflow_run.pull_requests[0].number }}"
+          fi
+          
+          # Run the DACP workflow
+          dacp run workflow agents/github-actions-error-workflow.yaml \
             --workflow-name quick_error_analysis \
             --input job_name="${{ github.event.workflow_run.name }}" \
             --input workflow_name="${{ github.event.workflow_run.name }}" \
@@ -41,5 +130,85 @@ jobs:
             --input repository="${{ github.repository }}" \
             --input branch="${{ github.event.workflow_run.head_branch }}" \
             --input commit_sha="${{ github.event.workflow_run.head_sha }}" \
-            --input pr_number="${{ github.event.workflow_run.pull_requests[0].number || '' }}" \
+            --input pr_number="$PR_NUMBER" \
             --output analysis-results.json
+          
+          echo "Analysis completed successfully"
+          
+      - name: Process analysis results
+        if: always()
+        run: |
+          if [ -f analysis-results.json ]; then
+            echo "Analysis results:"
+            cat analysis-results.json | jq '.'
+            
+            # Extract key information for summary
+            ROOT_CAUSE=$(cat analysis-results.json | jq -r '.context.output.analysis_result.root_cause // "Unknown"')
+            CATEGORY=$(cat analysis-results.json | jq -r '.context.output.analysis_result.error_category // "Unknown"')
+            SUMMARY=$(cat analysis-results.json | jq -r '.context.output.developer_message.summary // "No summary available"')
+            
+            echo "ROOT_CAUSE=$ROOT_CAUSE" >> $GITHUB_ENV
+            echo "CATEGORY=$CATEGORY" >> $GITHUB_ENV
+            echo "SUMMARY=$SUMMARY" >> $GITHUB_ENV
+          else
+            echo "No analysis results found"
+          fi
+          
+      - name: Comment on PR (if applicable)
+        if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.pull_requests[0].number
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            let analysisComment = "## 🤖 AI Error Analysis\n\n";
+            
+            if (fs.existsSync('analysis-results.json')) {
+              const results = JSON.parse(fs.readFileSync('analysis-results.json', 'utf8'));
+              const output = results.context?.output;
+              
+              if (output) {
+                analysisComment += `**Error Category:** ${output.analysis_result?.error_category || 'Unknown'}\n`;
+                analysisComment += `**Root Cause:** ${output.analysis_result?.root_cause || 'Unknown'}\n`;
+                analysisComment += `**Confidence:** ${output.analysis_result?.confidence_level || 'Unknown'}\n\n`;
+                
+                analysisComment += `### 💬 Summary\n${output.developer_message?.summary || 'No summary available'}\n\n`;
+                
+                if (output.recommended_fixes && output.recommended_fixes.length > 0) {
+                  analysisComment += `### 🔧 Recommended Fixes\n`;
+                  output.recommended_fixes.forEach((fix, index) => {
+                    analysisComment += `${index + 1}. **${fix.fix_title}**\n`;
+                    analysisComment += `   - ${fix.fix_description}\n`;
+                    analysisComment += `   - Effort: ${fix.estimated_effort}\n\n`;
+                  });
+                }
+                
+                if (output.developer_message?.next_steps) {
+                  analysisComment += `### 📋 Next Steps\n`;
+                  output.developer_message.next_steps.forEach((step, index) => {
+                    analysisComment += `${index + 1}. ${step}\n`;
+                  });
+                }
+              } else {
+                analysisComment += "Analysis completed but no detailed results available.";
+              }
+            } else {
+              analysisComment += "❌ Analysis failed or no results generated.";
+            }
+            
+            await github.rest.issues.createComment({
+              issue_number: ${{ github.event.workflow_run.pull_requests[0].number }},
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: analysisComment
+            });
+            
+      - name: Upload analysis results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: error-analysis-results
+          path: |
+            analysis-results.json
+            combined-logs.txt
+          retention-days: 30
