@@ -1,0 +1,45 @@
+# .github/workflows/error-analysis.yml
+name: DACP Error Analysis
+
+on:
+  workflow_run:
+    workflows: ["CI", "Build", "Test", "Lint", "Deploy"]
+    types: [completed]
+
+jobs:
+  analyze-error:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout agents repo
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          
+      - name: Install DACP
+        run: pip install dacp[openai]
+        
+      - name: Get workflow logs
+        id: get-logs
+        run: |
+          gh run download ${{ github.event.workflow_run.id }} --log
+          echo "logs=$(cat 0_build.txt 2>/dev/null || cat 0_test.txt 2>/dev/null || cat 0_lint.txt 2>/dev/null || echo 'No specific log file found')" >> $GITHUB_OUTPUT
+          
+      - name: Run DACP analysis
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          dacp run workflow workflows/github-actions-error-workflow.yaml \
+            --workflow-name quick_error_analysis \
+            --input job_name="${{ github.event.workflow_run.name }}" \
+            --input workflow_name="${{ github.event.workflow_run.name }}" \
+            --input raw_logs="${{ steps.get-logs.outputs.logs }}" \
+            --input repository="${{ github.repository }}" \
+            --input branch="${{ github.event.workflow_run.head_branch }}" \
+            --input commit_sha="${{ github.event.workflow_run.head_sha }}" \
+            --input pr_number="${{ github.event.workflow_run.pull_requests[0].number || '' }}" \
+            --output analysis-results.json
