@@ -61,24 +61,38 @@ runs:
         LOG_DOWNLOADED=false
         
         # Method 1: Direct download
+        echo "Attempting to download logs for workflow run: ${{ inputs.workflow_run_id }}"
+        echo "Repository: ${{ inputs.repository }}"
+        echo "GH_TOKEN available: $([ -n "$GH_TOKEN" ] && echo "Yes" || echo "No")"
+        
         if gh run download ${{ inputs.workflow_run_id }} \
           --repo ${{ inputs.repository }} \
           --dir workflow-logs; then
           echo "✅ Log download successful"
           LOG_DOWNLOADED=true
+        else
+          echo "❌ Log download failed with exit code: $?"
         fi
         
         # Method 2: GitHub API fallback
         if [ "$LOG_DOWNLOADED" = "false" ]; then
+          echo "Trying API fallback method..."
           API_URL="https://api.github.com/repos/${{ inputs.repository }}/actions/runs/${{ inputs.workflow_run_id }}/logs"
+          echo "API URL: $API_URL"
+          
           if curl -H "Authorization: token $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
             -L "$API_URL" \
             -o workflow-logs/api-download.zip; then
+            echo "✅ API download successful"
             if unzip -q workflow-logs/api-download.zip -d workflow-logs/ 2>/dev/null; then
-              echo "✅ API log download successful"
+              echo "✅ API log extraction successful"
               LOG_DOWNLOADED=true
+            else
+              echo "❌ API log extraction failed"
             fi
+          else
+            echo "❌ API download failed with exit code: $?"
           fi
         fi
         
