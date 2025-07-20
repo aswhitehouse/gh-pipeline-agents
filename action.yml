@@ -59,6 +59,20 @@ runs:
         
         # First, check if the workflow run exists and get its status
         echo "Checking workflow run status..."
+        echo "Repository: ${{ inputs.repository }}"
+        echo "Workflow Run ID: ${{ inputs.workflow_run_id }}"
+        echo "Token length: ${#GITHUB_TOKEN}"
+        
+        # Test token permissions
+        echo "Testing token permissions..."
+        if curl -H "Authorization: token $GITHUB_TOKEN" \
+          -H "Accept: application/vnd.github.v3+json" \
+          "https://api.github.com/repos/${{ inputs.repository }}" > /dev/null 2>&1; then
+          echo "✅ Token has repository access"
+        else
+          echo "❌ Token does not have repository access"
+        fi
+        
         WORKFLOW_STATUS=$(gh run view ${{ inputs.workflow_run_id }} \
           --repo ${{ inputs.repository }} \
           --json status,conclusion,createdAt,updatedAt \
