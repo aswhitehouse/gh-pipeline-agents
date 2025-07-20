@@ -65,7 +65,7 @@ runs:
         
         # Test token permissions
         echo "Testing token permissions..."
-        if curl -H "Authorization: token $GITHUB_TOKEN" \
+        if curl -H "Authorization: token $GH_TOKEN" \
           -H "Accept: application/vnd.github.v3+json" \
           "https://api.github.com/repos/${{ inputs.repository }}" > /dev/null 2>&1; then
           echo "✅ Token has repository access"
@@ -103,7 +103,7 @@ runs:
           API_URL="https://api.github.com/repos/${{ inputs.repository }}/actions/runs/${{ inputs.workflow_run_id }}/logs"
           echo "API URL: $API_URL"
           
-          if curl -H "Authorization: token $GITHUB_TOKEN" \
+          if curl -H "Authorization: token $GH_TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
             -L "$API_URL" \
             -o workflow-logs/api-download.zip; then
@@ -134,7 +134,7 @@ runs:
           # Try to get logs via curl with the GitHub token
           API_URL="https://api.github.com/repos/${{ inputs.repository }}/actions/runs/${{ inputs.workflow_run_id }}/logs"
           echo "API URL: $API_URL"
-          if curl -H "Authorization: token $GITHUB_TOKEN" \
+          if curl -H "Authorization: token $GH_TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
             -L "$API_URL" \
             -o workflow-logs/api-download.zip; then
