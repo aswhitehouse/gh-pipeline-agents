@@ -57,6 +57,15 @@ runs:
         # Download logs for the failed workflow
         mkdir -p workflow-logs
         
+        # First, check if the workflow run exists and get its status
+        echo "Checking workflow run status..."
+        WORKFLOW_STATUS=$(gh run view ${{ inputs.workflow_run_id }} \
+          --repo ${{ inputs.repository }} \
+          --json status,conclusion,createdAt,updatedAt \
+          --jq '.status + ":" + (.conclusion // "null")' 2>/dev/null || echo "not_found:null")
+        
+        echo "Workflow status: $WORKFLOW_STATUS"
+        
         # Try multiple methods to get logs
         LOG_DOWNLOADED=false
         
@@ -93,6 +102,30 @@ runs:
             fi
           else
             echo "❌ API download failed with exit code: $?"
+          fi
+        fi
+        
+        # Method 3: Try GitHub API directly (different approach)
+        if [ "$LOG_DOWNLOADED" = "false" ]; then
+          echo "Method 3: Trying GitHub API directly..."
+          # Try to get logs via curl with the GitHub token
+          API_URL="https://api.github.com/repos/${{ inputs.repository }}/actions/runs/${{ inputs.workflow_run_id }}/logs"
+          echo "API URL: $API_URL"
+          if curl -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -L "$API_URL" \
+            -o workflow-logs/api-download.zip; then
+            echo "✅ Method 3 successful (API download)"
+            # Try to extract the zip file
+            if unzip -q workflow-logs/api-download.zip -d workflow-logs/ 2>/dev/null; then
+              echo "✅ Method 3 successful (extraction)"
+              LOG_DOWNLOADED=true
+            else
+              echo "❌ Method 3 failed (extraction)"
+              rm -f workflow-logs/api-download.zip
+            fi
+          else
+            echo "❌ Method 3 failed (API download)"
           fi
         fi
         
