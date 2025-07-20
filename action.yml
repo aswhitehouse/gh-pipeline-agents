@@ -52,6 +52,7 @@ runs:
       shell: bash
       env:
         OPENAI_API_KEY: ${{ inputs.openai_api_key }}
+        GH_TOKEN: ${{ github.token }}
       run: |
         # Download logs for the failed workflow
         mkdir -p workflow-logs
