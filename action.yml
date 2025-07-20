@@ -250,9 +250,9 @@ runs:
         text: |
           🤖 **GitHub Actions Error Analysis**
           
-          **Repository:** ${{ inputs.repository }}
-          **Workflow Run:** ${{ inputs.workflow_run_id }}
-          **Branch:** ${{ inputs.branch }}
+          📦 **Repository:** ${{ inputs.repository }}
+          🔗 **Workflow Run:** ${{ inputs.workflow_run_id }}
+          🌿 **Branch:** ${{ inputs.branch }}
           
           ${{ steps.analysis.outputs.slack_summary || 'Analysis completed but no summary available.' }}
           

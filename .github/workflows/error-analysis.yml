@@ -2,7 +2,7 @@
 # SECURITY NOTE: This workflow downloads and analyzes GitHub Actions logs.
 # Logs are processed by OpenAI for error analysis. Ensure your workflows
 # don't log sensitive information like API keys, passwords, or internal URLs.
-name: GitHub Actions Error Analysis
+name: 🤖 AI Error Analysis
 
 on:
   workflow_run:
@@ -21,7 +21,7 @@ jobs:
       issues: write
     
     steps:
-      - name: Run AI Error Analysis with Slack Notifications
+      - name: 🧠 Run AI Error Analysis with Slack Notifications
         uses: aswhitehouse/gh-pipeline-agents@main
         with:
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
@@ -33,7 +33,7 @@ jobs:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           # slack_channel: '#ci-alerts'  # Optional - webhook URL contains the channel
       
-      - name: Comment on PR (if applicable)
+      - name: 💬 Comment on PR (if applicable)
         if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.pull_requests[0].number
         uses: actions/github-script@v7
         with:
@@ -46,9 +46,9 @@ jobs:
               
               if (output) {
                 let comment = "## 🤖 AI Error Analysis\n\n";
-                comment += `**Error Category:** ${output.analysis_result?.error_category || 'Unknown'}\n`;
-                comment += `**Root Cause:** ${output.analysis_result?.root_cause || 'Unknown'}\n`;
-                comment += `**Confidence:** ${output.analysis_result?.confidence_level || 'Unknown'}\n\n`;
+                comment += `🔍 **Error Category:** ${output.analysis_result?.error_category || 'Unknown'}\n`;
+                comment += `🎯 **Root Cause:** ${output.analysis_result?.root_cause || 'Unknown'}\n`;
+                comment += `📊 **Confidence:** ${output.analysis_result?.confidence_level || 'Unknown'}\n\n`;
                 comment += `### 💬 Summary\n${output.developer_message?.summary || 'No summary available'}\n\n`;
                 
                 if (output.recommended_fixes && output.recommended_fixes.length > 0) {
@@ -56,7 +56,7 @@ jobs:
                   output.recommended_fixes.forEach((fix, index) => {
                     comment += `${index + 1}. **${fix.fix_title}**\n`;
                     comment += `   - ${fix.fix_description}\n`;
-                    comment += `   - Effort: ${fix.estimated_effort}\n\n`;
+                    comment += `   - ⏱️ Effort: ${fix.estimated_effort}\n\n`;
                   });
                 }
                 
