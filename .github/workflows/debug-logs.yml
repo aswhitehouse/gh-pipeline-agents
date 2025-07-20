@@ -1,0 +1,95 @@
+name: Debug Log Extraction
+
+on:
+  workflow_run:
+    workflows: ["Test Failure Workflow"]
+    types: [completed]
+
+jobs:
+  debug-logs:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      actions: read
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Debug workflow information
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "=== Workflow Run Information ==="
+          echo "Workflow Run ID: ${{ github.event.workflow_run.id }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Event: ${{ github.event.workflow_run.event }}"
+          echo "Conclusion: ${{ github.event.workflow_run.conclusion }}"
+          echo "Status: ${{ github.event.workflow_run.status }}"
+          
+          echo ""
+          echo "=== Getting Jobs Information ==="
+          gh run view ${{ github.event.workflow_run.id }} \
+            --repo ${{ github.repository }} \
+            --json jobs \
+            --jq '.jobs[] | {name: .name, conclusion: .conclusion, status: .status}' || echo "Failed to get jobs info"
+          
+          echo ""
+          echo "=== Getting Failed Jobs ==="
+          FAILED_JOBS=$(gh run view ${{ github.event.workflow_run.id }} \
+            --repo ${{ github.repository }} \
+            --json jobs \
+            --jq '.jobs[] | select(.conclusion == "failure") | .name' || echo "")
+          echo "Failed jobs: '$FAILED_JOBS'"
+          
+      - name: Test log download
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "=== Testing Log Download ==="
+          
+          # Create logs directory
+          mkdir -p debug-logs
+          
+          # Try to download logs
+          echo "Downloading logs..."
+          gh run download ${{ github.event.workflow_run.id }} \
+            --repo ${{ github.repository }} \
+            --dir debug-logs 2>&1 || echo "Download failed"
+          
+          echo ""
+          echo "=== Downloaded Files ==="
+          find debug-logs -type f | head -10 || echo "No files found"
+          
+          echo ""
+          echo "=== Sample Log Content ==="
+          find debug-logs -name "*.txt" -type f | head -3 | while read -r logfile; do
+            echo "--- $logfile ---"
+            head -20 "$logfile" 2>/dev/null || echo "Could not read file"
+            echo ""
+          done
+          
+      - name: Test log processing
+        run: |
+          echo "=== Testing Log Processing ==="
+          
+          if [ -d debug-logs ]; then
+            echo "Processing logs..."
+            
+            # Look for error patterns
+            find debug-logs -name "*.txt" -type f | head -5 | while read -r logfile; do
+              echo "Checking: $logfile"
+              if grep -l -i "error\|fail\|exception\|fatal" "$logfile" >/dev/null 2>&1; then
+                echo "  ✅ Found errors in $logfile"
+                echo "  Sample errors:"
+                grep -i "error\|fail\|exception\|fatal" "$logfile" | head -3
+              else
+                echo "  ❌ No obvious errors in $logfile"
+              fi
+              echo ""
+            done
+          else
+            echo "No debug-logs directory found"
+          fi 
