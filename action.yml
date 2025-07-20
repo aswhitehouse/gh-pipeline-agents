@@ -26,7 +26,7 @@ inputs:
     description: 'Slack webhook URL for notifications (optional)'
     required: false
   slack_channel:
-    description: 'Slack channel for notifications (default: #github-actions)'
+    description: 'Slack channel override (optional - webhook URL usually contains the channel)'
     required: false
 
 runs:
@@ -246,7 +246,7 @@ runs:
       with:
         status: ${{ job.status }}
         webhook_url: ${{ inputs.slack_webhook_url }}
-        channel: ${{ inputs.slack_channel || '#github-actions' }}
+        channel: ${{ inputs.slack_channel || '' }}
         text: |
           🤖 **GitHub Actions Error Analysis**
           

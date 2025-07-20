@@ -58,7 +58,7 @@ To enable Slack notifications:
 - Go to your Slack workspace
 - Create a new app or use an existing one
 - Add the "Incoming Webhooks" feature
-- Create a webhook for your desired channel
+- Create a webhook for your desired channel (the webhook URL contains the channel info)
 - Copy the webhook URL
 - Add it as a repository secret named `SLACK_WEBHOOK_URL`
 
@@ -159,7 +159,7 @@ jobs:
           commit_sha: ${{ github.event.workflow_run.head_sha }}
           pr_number: ${{ github.event.workflow_run.pull_requests[0].number || '' }}
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          slack_channel: '#ci-alerts'  # Optional: customize channel
+          # slack_channel: '#ci-alerts'  # Optional - webhook URL contains the channel
 ```
 
 ## 🔍 What You'll Get
