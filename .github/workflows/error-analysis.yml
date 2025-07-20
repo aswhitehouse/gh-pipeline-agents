@@ -41,63 +41,73 @@ jobs:
           # Get information about the failed workflow
           echo "Analyzing workflow run ${{ github.event.workflow_run.id }}"
           
-          # Get failed jobs only (more efficient than downloading all logs)
-          echo "Getting failed job information..."
-          FAILED_JOBS=$(gh run view ${{ github.event.workflow_run.id }} \
+          # Create logs directory
+          mkdir -p workflow-logs
+          
+          # Download logs for the failed workflow
+          echo "Downloading logs for failed workflow..."
+          if gh run download ${{ github.event.workflow_run.id }} \
             --repo ${{ github.repository }} \
-            --json jobs \
-            --jq '.jobs[] | select(.conclusion == "failure") | .name' || echo "")
-          
-          echo "Failed jobs: $FAILED_JOBS"
-          
-          if [ -z "$FAILED_JOBS" ]; then
-            echo "No specific failed jobs found, downloading minimal logs..."
-            RAW_LOGS="Workflow failed but no specific job failures detected. Workflow: ${{ github.event.workflow_run.name }}, Branch: ${{ github.event.workflow_run.head_branch }}, Commit: ${{ github.event.workflow_run.head_sha }}"
+            --dir workflow-logs; then
+            echo "✅ Log download successful"
           else
-            # Create logs directory
-            mkdir -p workflow-logs
+            echo "❌ Log download failed"
+            # Fallback: try to get basic workflow info
+            RAW_LOGS="Workflow failed but could not download logs. Workflow: ${{ github.event.workflow_run.name }}, Branch: ${{ github.event.workflow_run.head_branch }}, Commit: ${{ github.event.workflow_run.head_sha }}"
+            echo "logs<<EOF" >> $GITHUB_OUTPUT
+            echo "$RAW_LOGS" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # List downloaded files for debugging
+          echo "Downloaded files:"
+          find workflow-logs -type f | head -10
+          
+          # Process logs - look for error patterns
+          echo "Extracting error information from logs..."
+          
+          # Create a temporary file for processed logs
+          TEMP_LOG_FILE="processed-logs.txt"
+          touch "$TEMP_LOG_FILE"
+          
+          # Process each log file
+          find workflow-logs -name "*.txt" -type f | while read -r logfile; do
+            echo "Processing: $logfile"
             
-            # Download logs (GitHub CLI downloads all, but we'll filter efficiently)
-            echo "Downloading logs for failed workflow..."
-            gh run download ${{ github.event.workflow_run.id }} \
-              --repo ${{ github.repository }} \
-              --dir workflow-logs 2>/dev/null || true
-            
-            # Process logs more efficiently - focus on error patterns
-            echo "Extracting error information from logs..."
-            RAW_LOGS=""
-            
-            # Look for common error patterns and failed job logs
-            find workflow-logs -name "*.txt" -type f | head -10 | while read -r logfile; do
-              # Only process files that likely contain errors
-              if grep -l -i "error\|fail\|exception\|fatal\|panic\|abort" "$logfile" >/dev/null 2>&1; then
-                echo "=== ERRORS FROM: $(basename "$logfile") ===" >> error-logs.txt
-                # Extract lines around errors (more focused)
-                grep -B 3 -A 3 -i "error\|fail\|exception\|fatal" "$logfile" | head -100 >> error-logs.txt 2>/dev/null || true
-                echo -e "\n" >> error-logs.txt
-              fi
-            done
-            
-            # If no error patterns found, get last part of logs (likely where failures occur)
-            if [ ! -f error-logs.txt ]; then
-              echo "No obvious error patterns found, getting log tails..."
-              find workflow-logs -name "*.txt" -type f | head -5 | while read -r logfile; do
-                echo "=== TAIL OF: $(basename "$logfile") ===" >> error-logs.txt
-                tail -50 "$logfile" >> error-logs.txt 2>/dev/null || true
-                echo -e "\n" >> error-logs.txt
-              done
+            # Check if file contains errors
+            if grep -q -i "error\|fail\|exception\|fatal\|panic\|abort" "$logfile" 2>/dev/null; then
+              echo "=== ERRORS FROM: $(basename "$logfile") ===" >> "$TEMP_LOG_FILE"
+              # Extract lines around errors
+              grep -B 2 -A 5 -i "error\|fail\|exception\|fatal" "$logfile" | head -50 >> "$TEMP_LOG_FILE" 2>/dev/null || true
+              echo -e "\n" >> "$TEMP_LOG_FILE"
             fi
-            
-            # Read processed logs
-            if [ -f error-logs.txt ]; then
-              RAW_LOGS=$(cat error-logs.txt)
-            else
-              RAW_LOGS="Failed to extract error information from logs"
+          done
+          
+          # If no errors found, get the last part of the most recent log file
+          if [ ! -s "$TEMP_LOG_FILE" ]; then
+            echo "No obvious error patterns found, getting log tails..."
+            MOST_RECENT_LOG=$(find workflow-logs -name "*.txt" -type f -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
+            if [ -n "$MOST_RECENT_LOG" ] && [ -f "$MOST_RECENT_LOG" ]; then
+              echo "=== TAIL OF: $(basename "$MOST_RECENT_LOG") ===" >> "$TEMP_LOG_FILE"
+              tail -100 "$MOST_RECENT_LOG" >> "$TEMP_LOG_FILE" 2>/dev/null || true
             fi
           fi
           
+          # Read processed logs
+          if [ -s "$TEMP_LOG_FILE" ]; then
+            RAW_LOGS=$(cat "$TEMP_LOG_FILE")
+            echo "✅ Successfully extracted logs (${#RAW_LOGS} characters)"
+          else
+            RAW_LOGS="Failed to extract error information from logs. No error patterns found in downloaded logs."
+            echo "❌ No error patterns found in logs"
+          fi
+          
+          # Clean up temp file
+          rm -f "$TEMP_LOG_FILE"
+          
           # Limit output size (GitHub Actions variable limit)
-          MAX_SIZE=30000  # Reduced from 50000 for safety
+          MAX_SIZE=30000
           if [ ${#RAW_LOGS} -gt $MAX_SIZE ]; then
             echo "logs=${RAW_LOGS:0:$MAX_SIZE}... [TRUNCATED - Original size: ${#RAW_LOGS} chars]" >> $GITHUB_OUTPUT
             echo "Log truncated due to size (${#RAW_LOGS} > $MAX_SIZE chars)"
@@ -210,5 +220,5 @@ jobs:
           name: error-analysis-results
           path: |
             analysis-results.json
-            combined-logs.txt
+            workflow-logs/
           retention-days: 30
