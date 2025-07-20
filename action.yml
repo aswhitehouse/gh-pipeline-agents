@@ -38,7 +38,7 @@ runs:
       shell: bash
       run: |
         pip install dacp
-        pip install openai pydantic jinja2
+        pip install openai pydantic jinja2 python-dotenv behavioural-contracts
         
     - name: Download error analysis agents
       shell: bash
