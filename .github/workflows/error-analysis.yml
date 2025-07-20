@@ -46,18 +46,32 @@ jobs:
           
           # Download logs for the failed workflow
           echo "Downloading logs for failed workflow..."
+          echo "Workflow ID: ${{ github.event.workflow_run.id }}"
+          echo "Repository: ${{ github.repository }}"
+          
+          # Try to download logs
           if gh run download ${{ github.event.workflow_run.id }} \
             --repo ${{ github.repository }} \
             --dir workflow-logs; then
             echo "✅ Log download successful"
           else
             echo "❌ Log download failed"
-            # Fallback: try to get basic workflow info
-            RAW_LOGS="Workflow failed but could not download logs. Workflow: ${{ github.event.workflow_run.name }}, Branch: ${{ github.event.workflow_run.head_branch }}, Commit: ${{ github.event.workflow_run.head_sha }}"
-            echo "logs<<EOF" >> $GITHUB_OUTPUT
-            echo "$RAW_LOGS" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
-            exit 0
+            echo "Trying alternative approach..."
+            
+            # Alternative: try to get logs directly
+            if gh run view ${{ github.event.workflow_run.id }} \
+              --repo ${{ github.repository }} \
+              --log > workflow-logs/raw-workflow.log; then
+              echo "✅ Alternative log download successful"
+            else
+              echo "❌ All log download methods failed"
+              # Fallback: try to get basic workflow info
+              RAW_LOGS="Workflow failed but could not download logs. Workflow: ${{ github.event.workflow_run.name }}, Branch: ${{ github.event.workflow_run.head_branch }}, Commit: ${{ github.event.workflow_run.head_sha }}"
+              echo "logs<<EOF" >> $GITHUB_OUTPUT
+              echo "$RAW_LOGS" >> $GITHUB_OUTPUT
+              echo "EOF" >> $GITHUB_OUTPUT
+              exit 0
+            fi
           fi
           
           # List downloaded files for debugging
@@ -69,10 +83,10 @@ jobs:
           
           # Create a temporary file for processed logs
           TEMP_LOG_FILE="processed-logs.txt"
-          touch "$TEMP_LOG_FILE"
+          echo "" > "$TEMP_LOG_FILE"
           
-          # Process each log file
-          find workflow-logs -name "*.txt" -type f | while read -r logfile; do
+          # Process each log file (avoid subshell issues)
+          for logfile in $(find workflow-logs -name "*.txt" -type f); do
             echo "Processing: $logfile"
             
             # Check if file contains errors
@@ -87,7 +101,14 @@ jobs:
           # If no errors found, get the last part of the most recent log file
           if [ ! -s "$TEMP_LOG_FILE" ]; then
             echo "No obvious error patterns found, getting log tails..."
-            MOST_RECENT_LOG=$(find workflow-logs -name "*.txt" -type f -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
+            # Find the most recent log file
+            MOST_RECENT_LOG=""
+            for logfile in $(find workflow-logs -name "*.txt" -type f); do
+              if [ -z "$MOST_RECENT_LOG" ] || [ "$logfile" -nt "$MOST_RECENT_LOG" ]; then
+                MOST_RECENT_LOG="$logfile"
+              fi
+            done
+            
             if [ -n "$MOST_RECENT_LOG" ] && [ -f "$MOST_RECENT_LOG" ]; then
               echo "=== TAIL OF: $(basename "$MOST_RECENT_LOG") ===" >> "$TEMP_LOG_FILE"
               tail -100 "$MOST_RECENT_LOG" >> "$TEMP_LOG_FILE" 2>/dev/null || true
