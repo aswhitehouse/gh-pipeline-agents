@@ -22,6 +22,12 @@ inputs:
   pr_number:
     description: 'PR number if the workflow was triggered by a PR'
     required: false
+  slack_webhook_url:
+    description: 'Slack webhook URL for notifications (optional)'
+    required: false
+  slack_channel:
+    description: 'Slack channel for notifications (default: #github-actions)'
+    required: false
 
 runs:
   using: 'composite'
@@ -49,6 +55,7 @@ runs:
         rm -rf temp-agents
         
     - name: Run error analysis
+      id: analysis
       shell: bash
       env:
         OPENAI_API_KEY: ${{ inputs.openai_api_key }}
@@ -205,8 +212,22 @@ runs:
         if [ -f analysis-results.json ]; then
           echo "Analysis completed successfully"
           cat analysis-results.json
+          
+          # Extract summary for Slack notification
+          SUMMARY=$(cat analysis-results.json | jq -r '.context.output.developer_message.summary // "No summary available"' 2>/dev/null || echo "Analysis completed but summary could not be extracted")
+          ROOT_CAUSE=$(cat analysis-results.json | jq -r '.context.output.analysis_result.root_cause // "Unknown"' 2>/dev/null || echo "Unknown")
+          CATEGORY=$(cat analysis-results.json | jq -r '.context.output.analysis_result.error_category // "Unknown"' 2>/dev/null || echo "Unknown")
+          
+          # Create formatted summary for Slack
+          SLACK_SUMMARY="**Root Cause:** $ROOT_CAUSE\n**Category:** $CATEGORY\n**Summary:** $SUMMARY"
+          
+          echo "slack_summary<<EOF" >> $GITHUB_OUTPUT
+          echo "$SLACK_SUMMARY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
         else
           echo "Analysis failed"
+          echo "slack_summary=Analysis failed - no results generated" >> $GITHUB_OUTPUT
         fi
         
     - name: Upload analysis results
@@ -217,4 +238,24 @@ runs:
         path: |
           analysis-results.json
           workflow-logs/
-        retention-days: 30 
+        retention-days: 30
+        
+    - name: Send Slack notification
+      if: always() && inputs.slack_webhook_url != ''
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        webhook_url: ${{ inputs.slack_webhook_url }}
+        channel: ${{ inputs.slack_channel || '#github-actions' }}
+        text: |
+          🤖 **GitHub Actions Error Analysis**
+          
+          **Repository:** ${{ inputs.repository }}
+          **Workflow Run:** ${{ inputs.workflow_run_id }}
+          **Branch:** ${{ inputs.branch }}
+          
+          ${{ steps.analysis.outputs.slack_summary || 'Analysis completed but no summary available.' }}
+          
+          🔗 <https://github.com/${{ inputs.repository }}/actions/runs/${{ inputs.workflow_run_id }}|View Workflow Run>
+      env:
+        SLACK_WEBHOOK_URL: ${{ inputs.slack_webhook_url }} 

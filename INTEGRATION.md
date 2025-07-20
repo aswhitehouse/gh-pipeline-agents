@@ -53,6 +53,15 @@ Add your OpenAI API key as a repository secret:
 - Add a new secret named `OPENAI_API_KEY`
 - Paste your OpenAI API key
 
+### 2. Slack Webhook (Optional)
+To enable Slack notifications:
+- Go to your Slack workspace
+- Create a new app or use an existing one
+- Add the "Incoming Webhooks" feature
+- Create a webhook for your desired channel
+- Copy the webhook URL
+- Add it as a repository secret named `SLACK_WEBHOOK_URL`
+
 ### 2. Permissions
 The workflow needs these permissions:
 - `contents: read` - To access repository files
@@ -120,6 +129,37 @@ jobs:
           workflow_run_id: ${{ github.event.workflow_run.id }}
           repository: ${{ github.repository }}
           pr_number: ${{ github.event.workflow_run.pull_requests[0].number || '' }}
+```
+
+### With Slack Notifications
+```yaml
+# .github/workflows/error-analysis.yml
+name: Error Analysis
+
+on:
+  workflow_run:
+    workflows: ["CI", "Build", "Deploy"]
+    types: [completed]
+
+jobs:
+  analyze-error:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: aswhitehouse/gh-pipeline-agents@main
+        with:
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          workflow_run_id: ${{ github.event.workflow_run.id }}
+          repository: ${{ github.repository }}
+          branch: ${{ github.event.workflow_run.head_branch }}
+          commit_sha: ${{ github.event.workflow_run.head_sha }}
+          pr_number: ${{ github.event.workflow_run.pull_requests[0].number || '' }}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack_channel: '#ci-alerts'  # Optional: customize channel
 ```
 
 ## 🔍 What You'll Get
