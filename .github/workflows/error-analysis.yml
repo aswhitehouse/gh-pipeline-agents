@@ -49,41 +49,86 @@ jobs:
           echo "Workflow ID: ${{ github.event.workflow_run.id }}"
           echo "Repository: ${{ github.repository }}"
           
-          # Try to download logs
+          # First, let's check if the workflow run exists and get its status
+          echo "Checking workflow run status..."
+          WORKFLOW_STATUS=$(gh run view ${{ github.event.workflow_run.id }} \
+            --repo ${{ github.repository }} \
+            --json status,conclusion,createdAt,updatedAt \
+            --jq '.status + ":" + (.conclusion // "null")' 2>/dev/null || echo "not_found:null")
+          
+          echo "Workflow status: $WORKFLOW_STATUS"
+          
+          # Try multiple approaches to get logs
+          LOG_DOWNLOADED=false
+          
+          # Method 1: Direct log download
+          echo "Method 1: Trying direct log download..."
           if gh run download ${{ github.event.workflow_run.id }} \
             --repo ${{ github.repository }} \
             --dir workflow-logs; then
-            echo "✅ Log download successful"
+            echo "✅ Method 1 successful"
+            LOG_DOWNLOADED=true
           else
-            echo "❌ Log download failed"
-            echo "Trying alternative approach..."
-            
-            # Alternative: try to get logs directly
+            echo "❌ Method 1 failed"
+          fi
+          
+          # Method 2: Get logs via view command
+          if [ "$LOG_DOWNLOADED" = "false" ]; then
+            echo "Method 2: Trying log view..."
             if gh run view ${{ github.event.workflow_run.id }} \
               --repo ${{ github.repository }} \
               --log > workflow-logs/raw-workflow.log; then
-              echo "✅ Alternative log download successful"
+              echo "✅ Method 2 successful"
+              LOG_DOWNLOADED=true
             else
-              echo "❌ All log download methods failed"
-              echo "Logs may be unavailable or expired. Getting workflow metadata..."
-              
-              # Get detailed workflow information as fallback
-              WORKFLOW_INFO=$(gh run view ${{ github.event.workflow_run.id }} \
-                --repo ${{ github.repository }} \
-                --json name,conclusion,status,createdAt,updatedAt,headBranch,headSha,event,workflowName,jobs \
-                --jq '.jobs[] | select(.conclusion == "failure") | {name: .name, conclusion: .conclusion, status: .status, startedAt: .startedAt, completedAt: .completedAt}' 2>/dev/null || echo "[]")
-              
-              if [ "$WORKFLOW_INFO" != "[]" ]; then
-                RAW_LOGS="Workflow failed but logs are no longer available. Workflow: ${{ github.event.workflow_run.name }}, Branch: ${{ github.event.workflow_run.head_branch }}, Commit: ${{ github.event.workflow_run.head_sha }}. Failed jobs: $WORKFLOW_INFO"
-              else
-                RAW_LOGS="Workflow failed but logs are no longer available. Workflow: ${{ github.event.workflow_run.name }}, Branch: ${{ github.event.workflow_run.head_branch }}, Commit: ${{ github.event.workflow_run.head_sha }}. Note: GitHub Actions logs are typically available for 90 days."
-              fi
-              
-              echo "logs<<EOF" >> $GITHUB_OUTPUT
-              echo "$RAW_LOGS" >> $GITHUB_OUTPUT
-              echo "EOF" >> $GITHUB_OUTPUT
-              exit 0
+              echo "❌ Method 2 failed"
             fi
+          fi
+          
+          # Method 3: Try to get job-specific logs
+          if [ "$LOG_DOWNLOADED" = "false" ]; then
+            echo "Method 3: Trying to get job information..."
+            FAILED_JOBS=$(gh run view ${{ github.event.workflow_run.id }} \
+              --repo ${{ github.repository }} \
+              --json jobs \
+              --jq '.jobs[] | select(.conclusion == "failure") | .name' 2>/dev/null || echo "")
+            
+            if [ -n "$FAILED_JOBS" ]; then
+              echo "Found failed jobs: $FAILED_JOBS"
+              # Try to get logs for specific failed jobs
+              for job in $FAILED_JOBS; do
+                echo "Trying to get logs for job: $job"
+                if gh run download ${{ github.event.workflow_run.id }} \
+                  --repo ${{ github.repository }} \
+                  --dir workflow-logs \
+                  --name "$job"; then
+                  echo "✅ Method 3 successful for job: $job"
+                  LOG_DOWNLOADED=true
+                  break
+                fi
+              done
+            else
+              echo "No failed jobs found"
+            fi
+          fi
+          
+          # If all methods failed, provide detailed fallback
+          if [ "$LOG_DOWNLOADED" = "false" ]; then
+            echo "❌ All log download methods failed"
+            echo "Getting detailed workflow information for fallback..."
+            
+            # Get comprehensive workflow information
+            WORKFLOW_DETAILS=$(gh run view ${{ github.event.workflow_run.id }} \
+              --repo ${{ github.repository }} \
+              --json name,conclusion,status,createdAt,updatedAt,headBranch,headSha,event,workflowName,jobs,url \
+              --jq '{name: .name, conclusion: .conclusion, status: .status, createdAt: .createdAt, updatedAt: .updatedAt, branch: .headBranch, sha: .headSha, event: .event, workflowName: .workflowName, url: .url, jobs: [.jobs[] | select(.conclusion == "failure") | {name: .name, conclusion: .conclusion, status: .status, startedAt: .startedAt, completedAt: .completedAt}]}' 2>/dev/null || echo "{}")
+            
+            RAW_LOGS="Workflow failed but logs could not be downloaded. This may be due to timing issues or permission constraints. Workflow details: $WORKFLOW_DETAILS. You can view the logs manually at: https://github.com/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}"
+            
+            echo "logs<<EOF" >> $GITHUB_OUTPUT
+            echo "$RAW_LOGS" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+            exit 0
           fi
           
           # List downloaded files for debugging
