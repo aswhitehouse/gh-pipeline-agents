@@ -52,7 +52,6 @@ runs:
       shell: bash
       env:
         OPENAI_API_KEY: ${{ inputs.openai_api_key }}
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         # Download logs for the failed workflow
         mkdir -p workflow-logs
@@ -71,7 +70,7 @@ runs:
         # Method 2: GitHub API fallback
         if [ "$LOG_DOWNLOADED" = "false" ]; then
           API_URL="https://api.github.com/repos/${{ inputs.repository }}/actions/runs/${{ inputs.workflow_run_id }}/logs"
-          if curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          if curl -H "Authorization: token $GITHUB_TOKEN" \
             -H "Accept: application/vnd.github.v3+json" \
             -L "$API_URL" \
             -o workflow-logs/api-download.zip; then
