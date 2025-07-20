@@ -61,15 +61,27 @@ jobs:
           # Try multiple approaches to get logs
           LOG_DOWNLOADED=false
           
-          # Method 1: Direct log download
+          # Method 1: Direct log download (with retry)
           echo "Method 1: Trying direct log download..."
-          if gh run download ${{ github.event.workflow_run.id }} \
-            --repo ${{ github.repository }} \
-            --dir workflow-logs; then
-            echo "✅ Method 1 successful"
-            LOG_DOWNLOADED=true
-          else
-            echo "❌ Method 1 failed"
+          for attempt in 1 2 3; do
+            echo "  Attempt $attempt/3..."
+            if gh run download ${{ github.event.workflow_run.id }} \
+              --repo ${{ github.repository }} \
+              --dir workflow-logs; then
+              echo "✅ Method 1 successful on attempt $attempt"
+              LOG_DOWNLOADED=true
+              break
+            else
+              echo "  ❌ Attempt $attempt failed"
+              if [ $attempt -lt 3 ]; then
+                echo "  Waiting 10 seconds before retry..."
+                sleep 10
+              fi
+            fi
+          done
+          
+          if [ "$LOG_DOWNLOADED" = "false" ]; then
+            echo "❌ Method 1 failed after all attempts"
           fi
           
           # Method 2: Get logs via view command
@@ -109,6 +121,29 @@ jobs:
               done
             else
               echo "No failed jobs found"
+            fi
+          fi
+          
+          # Method 4: Try GitHub API directly
+          if [ "$LOG_DOWNLOADED" = "false" ]; then
+            echo "Method 4: Trying GitHub API directly..."
+            # Try to get logs via curl with the GitHub token
+            API_URL="https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}/logs"
+            if curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -L "$API_URL" \
+              -o workflow-logs/api-download.zip; then
+              echo "✅ Method 4 successful (API download)"
+              # Try to extract the zip file
+              if unzip -q workflow-logs/api-download.zip -d workflow-logs/ 2>/dev/null; then
+                echo "✅ Method 4 successful (extraction)"
+                LOG_DOWNLOADED=true
+              else
+                echo "❌ Method 4 failed (extraction)"
+                rm -f workflow-logs/api-download.zip
+              fi
+            else
+              echo "❌ Method 4 failed (API download)"
             fi
           fi
           
