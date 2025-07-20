@@ -108,11 +108,20 @@ runs:
             -L "$API_URL" \
             -o workflow-logs/api-download.zip; then
             echo "✅ API download successful"
+            
+            # Check what was actually downloaded
+            echo "Downloaded file size: $(wc -c < workflow-logs/api-download.zip) bytes"
+            echo "Downloaded file content (first 200 chars):"
+            head -c 200 workflow-logs/api-download.zip
+            echo ""
+            
             if unzip -q workflow-logs/api-download.zip -d workflow-logs/ 2>/dev/null; then
               echo "✅ API log extraction successful"
               LOG_DOWNLOADED=true
             else
               echo "❌ API log extraction failed"
+              echo "Unzip error details:"
+              unzip -t workflow-logs/api-download.zip 2>&1 || true
             fi
           else
             echo "❌ API download failed with exit code: $?"
@@ -130,12 +139,21 @@ runs:
             -L "$API_URL" \
             -o workflow-logs/api-download.zip; then
             echo "✅ Method 3 successful (API download)"
+            
+            # Check what was actually downloaded
+            echo "Downloaded file size: $(wc -c < workflow-logs/api-download.zip) bytes"
+            echo "Downloaded file content (first 200 chars):"
+            head -c 200 workflow-logs/api-download.zip
+            echo ""
+            
             # Try to extract the zip file
             if unzip -q workflow-logs/api-download.zip -d workflow-logs/ 2>/dev/null; then
               echo "✅ Method 3 successful (extraction)"
               LOG_DOWNLOADED=true
             else
               echo "❌ Method 3 failed (extraction)"
+              echo "Unzip error details:"
+              unzip -t workflow-logs/api-download.zip 2>&1 || true
               rm -f workflow-logs/api-download.zip
             fi
           else
