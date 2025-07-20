@@ -1,0 +1,66 @@
+# .github/workflows/error-analysis.yml
+# Basic integration example - copy this to your repository
+
+name: Error Analysis
+
+on:
+  workflow_run:
+    workflows: ["CI", "Build", "Test", "Deploy"]  # Add your workflow names here
+    types: [completed]
+
+jobs:
+  analyze-error:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write  # Optional: for PR comments
+    
+    steps:
+      - name: Run AI Error Analysis
+        uses: aswhitehouse/gh-pipeline-agents@main
+        with:
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          workflow_run_id: ${{ github.event.workflow_run.id }}
+          repository: ${{ github.repository }}
+          branch: ${{ github.event.workflow_run.head_branch }}
+          commit_sha: ${{ github.event.workflow_run.head_sha }}
+          pr_number: ${{ github.event.workflow_run.pull_requests[0].number || '' }}
+      
+      - name: Comment on PR (if applicable)
+        if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.pull_requests[0].number
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            if (fs.existsSync('analysis-results.json')) {
+              const results = JSON.parse(fs.readFileSync('analysis-results.json', 'utf8'));
+              const output = results.context?.output;
+              
+              if (output) {
+                let comment = "## 🤖 AI Error Analysis\n\n";
+                comment += `**Error Category:** ${output.analysis_result?.error_category || 'Unknown'}\n`;
+                comment += `**Root Cause:** ${output.analysis_result?.root_cause || 'Unknown'}\n`;
+                comment += `**Confidence:** ${output.analysis_result?.confidence_level || 'Unknown'}\n\n`;
+                comment += `### 💬 Summary\n${output.developer_message?.summary || 'No summary available'}\n\n`;
+                
+                if (output.recommended_fixes && output.recommended_fixes.length > 0) {
+                  comment += `### 🔧 Recommended Fixes\n`;
+                  output.recommended_fixes.forEach((fix, index) => {
+                    comment += `${index + 1}. **${fix.fix_title}**\n`;
+                    comment += `   - ${fix.fix_description}\n`;
+                    comment += `   - Effort: ${fix.estimated_effort}\n\n`;
+                  });
+                }
+                
+                await github.rest.issues.createComment({
+                  issue_number: ${{ github.event.workflow_run.pull_requests[0].number }},
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: comment
+                });
+              }
+            } 

@@ -1,0 +1,141 @@
+name: 'GitHub Actions Error Analysis'
+description: 'AI-powered error analysis for failed GitHub Actions workflows'
+author: 'Andrew Whitehouse'
+
+inputs:
+  openai_api_key:
+    description: 'OpenAI API key for error analysis'
+    required: true
+  workflow_run_id:
+    description: 'ID of the failed workflow run to analyze'
+    required: true
+  repository:
+    description: 'Repository where the workflow failed (format: owner/repo)'
+    required: true
+  branch:
+    description: 'Branch where the workflow failed'
+    required: false
+    default: 'main'
+  commit_sha:
+    description: 'Commit SHA where the workflow failed'
+    required: false
+  pr_number:
+    description: 'PR number if the workflow was triggered by a PR'
+    required: false
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install DACP and dependencies
+      shell: bash
+      run: |
+        pip install dacp
+        pip install openai pydantic jinja2
+        
+    - name: Download error analysis agents
+      shell: bash
+      run: |
+        # Download the agents from this repository
+        git clone https://github.com/aswhitehouse/gh-pipeline-agents.git temp-agents
+        cp -r temp-agents/agents ./
+        rm -rf temp-agents
+        
+    - name: Run error analysis
+      shell: bash
+      env:
+        OPENAI_API_KEY: ${{ inputs.openai_api_key }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # Download logs for the failed workflow
+        mkdir -p workflow-logs
+        
+        # Try multiple methods to get logs
+        LOG_DOWNLOADED=false
+        
+        # Method 1: Direct download
+        if gh run download ${{ inputs.workflow_run_id }} \
+          --repo ${{ inputs.repository }} \
+          --dir workflow-logs; then
+          echo "✅ Log download successful"
+          LOG_DOWNLOADED=true
+        fi
+        
+        # Method 2: GitHub API fallback
+        if [ "$LOG_DOWNLOADED" = "false" ]; then
+          API_URL="https://api.github.com/repos/${{ inputs.repository }}/actions/runs/${{ inputs.workflow_run_id }}/logs"
+          if curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -L "$API_URL" \
+            -o workflow-logs/api-download.zip; then
+            if unzip -q workflow-logs/api-download.zip -d workflow-logs/ 2>/dev/null; then
+              echo "✅ API log download successful"
+              LOG_DOWNLOADED=true
+            fi
+          fi
+        fi
+        
+        # Process logs
+        TEMP_LOG_FILE="processed-logs.txt"
+        echo "" > "$TEMP_LOG_FILE"
+        
+        if [ "$LOG_DOWNLOADED" = "true" ]; then
+          # Extract error information from logs
+          for logfile in $(find workflow-logs -name "*.txt" -type f); do
+            if grep -q -i "error\|fail\|exception\|fatal\|panic\|abort" "$logfile" 2>/dev/null; then
+              echo "=== ERRORS FROM: $(basename "$logfile") ===" >> "$TEMP_LOG_FILE"
+              grep -B 2 -A 5 -i "error\|fail\|exception\|fatal" "$logfile" | \
+                sed -E 's/(password|secret|token|key|api_key|auth)=[^[:space:]]+/***REDACTED***/gi' | \
+                sed -E 's/(https?:\/\/[^[:space:]]*@[^[:space:]]*)/***REDACTED_URL***/gi' | \
+                head -50 >> "$TEMP_LOG_FILE" 2>/dev/null || true
+              echo -e "\n" >> "$TEMP_LOG_FILE"
+            fi
+          done
+          
+          if [ -s "$TEMP_LOG_FILE" ]; then
+            RAW_LOGS=$(cat "$TEMP_LOG_FILE")
+          else
+            RAW_LOGS="No error patterns found in logs"
+          fi
+        else
+          RAW_LOGS="Failed to download logs for workflow run ${{ inputs.workflow_run_id }}"
+        fi
+        
+        rm -f "$TEMP_LOG_FILE"
+        
+        # Run DACP analysis
+        dacp run workflow agents/github-actions-error-workflow.yaml \
+          --workflow-name quick_error_analysis \
+          --input job_name="Failed Workflow" \
+          --input workflow_name="Failed Workflow" \
+          --input raw_logs="$RAW_LOGS" \
+          --input repository="${{ inputs.repository }}" \
+          --input branch="${{ inputs.branch }}" \
+          --input commit_sha="${{ inputs.commit_sha }}" \
+          --input pr_number="${{ inputs.pr_number }}" \
+          --output analysis-results.json
+        
+        # Output results
+        if [ -f analysis-results.json ]; then
+          echo "Analysis completed successfully"
+          cat analysis-results.json
+        else
+          echo "Analysis failed"
+        fi
+        
+    - name: Upload analysis results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: error-analysis-results
+        path: |
+          analysis-results.json
+          workflow-logs/
+        retention-days: 30 
