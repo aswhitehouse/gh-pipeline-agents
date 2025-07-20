@@ -65,8 +65,20 @@ jobs:
               echo "✅ Alternative log download successful"
             else
               echo "❌ All log download methods failed"
-              # Fallback: try to get basic workflow info
-              RAW_LOGS="Workflow failed but could not download logs. Workflow: ${{ github.event.workflow_run.name }}, Branch: ${{ github.event.workflow_run.head_branch }}, Commit: ${{ github.event.workflow_run.head_sha }}"
+              echo "Logs may be unavailable or expired. Getting workflow metadata..."
+              
+              # Get detailed workflow information as fallback
+              WORKFLOW_INFO=$(gh run view ${{ github.event.workflow_run.id }} \
+                --repo ${{ github.repository }} \
+                --json name,conclusion,status,createdAt,updatedAt,headBranch,headSha,event,workflowName,jobs \
+                --jq '.jobs[] | select(.conclusion == "failure") | {name: .name, conclusion: .conclusion, status: .status, startedAt: .startedAt, completedAt: .completedAt}' 2>/dev/null || echo "[]")
+              
+              if [ "$WORKFLOW_INFO" != "[]" ]; then
+                RAW_LOGS="Workflow failed but logs are no longer available. Workflow: ${{ github.event.workflow_run.name }}, Branch: ${{ github.event.workflow_run.head_branch }}, Commit: ${{ github.event.workflow_run.head_sha }}. Failed jobs: $WORKFLOW_INFO"
+              else
+                RAW_LOGS="Workflow failed but logs are no longer available. Workflow: ${{ github.event.workflow_run.name }}, Branch: ${{ github.event.workflow_run.head_branch }}, Commit: ${{ github.event.workflow_run.head_sha }}. Note: GitHub Actions logs are typically available for 90 days."
+              fi
+              
               echo "logs<<EOF" >> $GITHUB_OUTPUT
               echo "$RAW_LOGS" >> $GITHUB_OUTPUT
               echo "EOF" >> $GITHUB_OUTPUT
