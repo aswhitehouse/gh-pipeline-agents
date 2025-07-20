@@ -1,4 +1,7 @@
 # .github/workflows/error-analysis.yml
+# SECURITY NOTE: This workflow downloads and analyzes GitHub Actions logs.
+# Logs are processed by OpenAI for error analysis. Ensure your workflows
+# don't log sensitive information like API keys, passwords, or internal URLs.
 name: GitHub Actions Error Analysis
 
 on:
@@ -184,8 +187,12 @@ jobs:
             # Check if file contains errors
             if grep -q -i "error\|fail\|exception\|fatal\|panic\|abort" "$logfile" 2>/dev/null; then
               echo "=== ERRORS FROM: $(basename "$logfile") ===" >> "$TEMP_LOG_FILE"
-              # Extract lines around errors
-              grep -B 2 -A 5 -i "error\|fail\|exception\|fatal" "$logfile" | head -50 >> "$TEMP_LOG_FILE" 2>/dev/null || true
+              # Extract lines around errors (with sensitive data filtering)
+              grep -B 2 -A 5 -i "error\|fail\|exception\|fatal" "$logfile" | \
+                # Remove potential sensitive patterns
+                sed -E 's/(password|secret|token|key|api_key|auth)=[^[:space:]]+/***REDACTED***/gi' | \
+                sed -E 's/(https?:\/\/[^[:space:]]*@[^[:space:]]*)/***REDACTED_URL***/gi' | \
+                head -50 >> "$TEMP_LOG_FILE" 2>/dev/null || true
               echo -e "\n" >> "$TEMP_LOG_FILE"
             fi
           done
