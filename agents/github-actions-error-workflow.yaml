@@ -202,6 +202,20 @@ workflows:
           root_cause_analysis: "{{ output.root_cause_analysis }}"
           recommended_fixes: "{{ output.recommended_fixes }}"
 
+      - name: propose_remediation
+        agent: github-actions-error-remediator
+        task: propose_remediation
+        input:
+          analysis_result: "{{ steps.analyze_error.output }}"
+          raw_logs: "{{ input.raw_logs }}"
+          repository: "{{ input.repository }}"
+          branch: "{{ input.branch | default('main') }}"
+          commit_sha: "{{ input.commit_sha | default('') }}"
+        output_mapping:
+          proposed_diff: "{{ output.proposed_diff }}"
+          files_to_change: "{{ output.files_to_change }}"
+          rationale: "{{ output.rationale }}"
+
     output:
       type: object
       properties:
@@ -209,7 +223,10 @@ workflows:
         severity_level: { type: string }
         root_cause: { type: string }
         quick_fixes: { type: array, items: { type: string } }
-      required: [error_summary, severity_level, root_cause, quick_fixes]
+        proposed_diff: { type: string }
+        files_to_change: { type: array, items: { type: string } }
+        rationale: { type: string }
+      required: [error_summary, severity_level, root_cause, quick_fixes, proposed_diff, files_to_change, rationale]
 
 configuration:
   orchestrator:
