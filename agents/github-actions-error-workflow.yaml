@@ -14,6 +14,10 @@ agents:
     spec: agents.github-actions-error-analyzer.agent:GithubActionsErrorAnalyzerAgent
     output_dir: "./temp/analyzer"
 
+  - id: github-actions-error-remediator
+    spec: github-actions-error-remediator.yaml
+    output_dir: "./temp/remediator"
+
 workflows:
   analyze_github_actions_failure:
     description: Complete end-to-end analysis of GitHub Actions failures
@@ -93,6 +97,21 @@ workflows:
           comment_type: "{{ output.comment_type }}"
           action_items: "{{ output.action_items }}"
 
+      # Propose remediation (code diff)
+      - name: propose_remediation
+        agent: github-actions-error-remediator
+        task: propose_remediation
+        input:
+          analysis_result: "{{ steps.analyze_error.output }}"
+          raw_logs: "{{ input.raw_logs }}"
+          repository: "{{ input.repository }}"
+          branch: "{{ input.branch | default('main') }}"
+          commit_sha: "{{ input.commit_sha | default('') }}"
+        output_mapping:
+          proposed_diff: "{{ output.proposed_diff }}"
+          files_to_change: "{{ output.files_to_change }}"
+          rationale: "{{ output.rationale }}"
+
       # Step 5: Suggest workflow improvements
       - name: suggest_workflow_improvements
         agent: github-actions-error-analyzer
@@ -135,6 +154,13 @@ workflows:
             pr_comment: { type: string }
             comment_type: { type: string }
             action_items: { type: array, items: { type: string } }
+        remediation:
+          type: object
+          description: Proposed code changes to remediate the error
+          properties:
+            proposed_diff: { type: string }
+            files_to_change: { type: array, items: { type: string } }
+            rationale: { type: string }
         workflow_improvements:
           type: object
           description: Suggestions for workflow optimization
@@ -224,6 +250,12 @@ configuration:
         OPENAI_API_KEY: "${OPENAI_API_KEY}"
         DACP_LOG_LEVEL: "INFO"
         DACP_LOG_FILE_ANALYZER: "./logs/analyzer.log"
+        
+    github-actions-error-remediator:
+      env:
+        OPENAI_API_KEY: "${OPENAI_API_KEY}"
+        DACP_LOG_LEVEL: "INFO"
+        DACP_LOG_FILE_REMEDIATOR: "./logs/remediator.log"
 
 usage_examples:
   full_analysis:

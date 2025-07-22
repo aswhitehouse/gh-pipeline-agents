@@ -1,0 +1,123 @@
+open_agent_spec: 1.0.8
+
+agent:
+  name: github-actions-error-remediator
+  description: Agent that proposes code changes to remediate errors detected in GitHub Actions runs, based on analyzer output.
+  role: executor
+
+intelligence:
+  type: llm
+  engine: openai
+  model: gpt-4
+  endpoint: https://api.openai.com/v1
+  config:
+    temperature: 0.2
+    max_tokens: 2000
+
+logging:
+  enabled: true
+  level: "INFO"
+  format_style: "emoji"
+  include_timestamp: true
+  log_file: "./logs/github-actions-remediator.log"
+
+  env_overrides:
+    level: "DACP_LOG_LEVEL"
+    format_style: "DACP_LOG_STYLE"
+    log_file: "DACP_LOG_FILE_REMEDIATOR"
+
+tasks:
+  propose_remediation:
+    description: Propose a code change (diff) to fix the error described in the analyzer output.
+    timeout: 120
+    input:
+      type: object
+      properties:
+        analysis_result:
+          type: object
+          description: Output from the analyzer agent (root cause, recommended fix, etc.)
+        raw_logs:
+          type: string
+          description: Raw logs from the failed workflow
+        repository:
+          type: string
+          description: Repository name (e.g., owner/repo)
+        branch:
+          type: string
+          description: Branch where the error occurred
+        commit_sha:
+          type: string
+          description: Commit SHA of the failed run
+      required: [analysis_result, raw_logs, repository, branch, commit_sha]
+      examples:
+        - analysis_result:
+            root_cause: "Missing package.json file"
+            recommended_fixes: ["Add a package.json file to the repository root"]
+          raw_logs: "npm ERR! enoent ENOENT: no such file or directory, open 'package.json'"
+          repository: "myorg/myrepo"
+          branch: "main"
+          commit_sha: "abc123def456"
+    output:
+      type: object
+      properties:
+        proposed_diff:
+          type: string
+          description: Unified diff (patch) showing the proposed fix
+        files_to_change:
+          type: array
+          items:
+            type: string
+          description: List of files that should be changed
+        rationale:
+          type: string
+          description: Explanation of why this fix is proposed
+      required: [proposed_diff, files_to_change, rationale]
+      examples:
+        - proposed_diff: |
+            --- /dev/null
+            +++ b/package.json
+            @@ ... (diff content here)
+          files_to_change: ["package.json"]
+          rationale: "The error indicates that package.json is missing. Adding this file resolves the npm error."
+
+prompts:
+  system: >
+    You are an expert software remediator. Your job is to propose concrete code changes (as a unified diff) to fix errors in GitHub Actions workflows, based on detailed analysis and logs.
+
+  user: |
+    The following error was detected in a GitHub Actions run:
+
+    Repository: {{ repository }}
+    Branch: {{ branch }}
+    Commit: {{ commit_sha }}
+
+    Analyzer output:
+    {{ analysis_result }}
+
+    Raw logs:
+    {{ raw_logs }}
+
+    Respond ONLY with valid JSON matching this schema:
+    {
+      "proposed_diff": "string (unified diff)",
+      "files_to_change": ["string", "..."],
+      "rationale": "string"
+    }
+
+    Example:
+    {
+      "proposed_diff": "--- /dev/null\\n+++ b/package.json\\n@@ ... (diff content here)",
+      "files_to_change": ["package.json"],
+      "rationale": "The error indicates that package.json is missing. Adding this file resolves the npm error."
+    }
+
+behavioural_contract:
+  version: "0.1.2"
+  description: "Requires a valid unified diff, a list of changed files, and a clear rationale."
+  role: "Remediator"
+  behavioural_flags:
+    conservatism: "moderate"
+    verbosity: "concise"
+  response_contract:
+    output_format:
+      required_fields: [proposed_diff, files_to_change, rationale]
