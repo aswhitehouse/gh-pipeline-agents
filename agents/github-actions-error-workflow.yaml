@@ -199,14 +199,13 @@ workflows:
           log_statistics: "{{ steps.collect_errors.output.log_statistics }}"
           additional_context: {}
         output_mapping:
-          root_cause_analysis: "{{ output.root_cause_analysis }}"
-          recommended_fixes: "{{ output.recommended_fixes }}"
+          analysis_result: "{{ output }}"
 
       - name: propose_remediation
         agent: github-actions-error-remediator
         task: propose_remediation
         input:
-          analysis_result: "{{ steps.analyze_error.output }}"
+          analysis_result: "{{ steps.analyze_error.output.analysis_result }}"
           raw_logs: "{{ input.raw_logs }}"
           repository: "{{ input.repository }}"
           branch: "{{ input.branch | default('main') }}"
