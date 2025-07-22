@@ -219,7 +219,7 @@ def collect_errors(job_name: str, workflow_name: str, raw_logs: str, job_step: s
     # Configure intelligence for DACP
     intelligence_config = {
     "engine": "openai",
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4",
     "endpoint": "https://api.openai.com/v1",
     "temperature": 0.2,
     "max_tokens": 1500
@@ -344,7 +344,7 @@ def extract_build_info(raw_logs: str, build_system: str, memory_summary: str = '
     # Configure intelligence for DACP
     intelligence_config = {
     "engine": "openai",
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4",
     "endpoint": "https://api.openai.com/v1",
     "temperature": 0.2,
     "max_tokens": 1500
@@ -361,7 +361,7 @@ class GithubActionsErrorCollectorAgent(dacp.Agent):
         super().__init__()
         self.agent_id = agent_id
         orchestrator.register_agent(agent_id, self)
-        self.model = "gpt-3.5-turbo"
+        self.model = "gpt-4"
 
         # Embed YAML config as dict during generation
         self.config = {
@@ -379,7 +379,7 @@ class GithubActionsErrorCollectorAgent(dacp.Agent):
             },
             "intelligence": {
                 "engine": "openai",
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-4",
                 "endpoint": "https://api.openai.com/v1",
                 "config": {
                     "temperature": 0.2,

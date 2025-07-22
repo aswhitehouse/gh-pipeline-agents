@@ -243,7 +243,7 @@ def analyze_error(error_summary: Dict[str, Any], job_context: Dict[str, Any], lo
     # Configure intelligence for DACP
     intelligence_config = {
     "engine": "openai",
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4",
     "endpoint": "https://api.openai.com/v1",
     "temperature": 0.3,
     "max_tokens": 2000
@@ -365,7 +365,7 @@ def generate_pr_comment(analysis_result: Dict[str, Any], recommended_fixes: List
     # Configure intelligence for DACP
     intelligence_config = {
     "engine": "openai",
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4",
     "endpoint": "https://api.openai.com/v1",
     "temperature": 0.3,
     "max_tokens": 2000
@@ -487,7 +487,7 @@ def suggest_workflow_improvements(error_analysis: Dict[str, Any], workflow_name:
     # Configure intelligence for DACP
     intelligence_config = {
     "engine": "openai",
-    "model": "gpt-3.5-turbo",
+    "model": "gpt-4",
     "endpoint": "https://api.openai.com/v1",
     "temperature": 0.3,
     "max_tokens": 2000
@@ -504,7 +504,7 @@ class GithubActionsErrorAnalyzerAgent(dacp.Agent):
         super().__init__()
         self.agent_id = agent_id
         orchestrator.register_agent(agent_id, self)
-        self.model = "gpt-3.5-turbo"
+        self.model = "gpt-4"
 
         # Embed YAML config as dict during generation
         self.config = {
@@ -522,7 +522,7 @@ class GithubActionsErrorAnalyzerAgent(dacp.Agent):
             },
             "intelligence": {
                 "engine": "openai",
-                "model": "gpt-3.5-turbo",
+                "model": "gpt-4",
                 "endpoint": "https://api.openai.com/v1",
                 "config": {
                     "temperature": 0.3,
