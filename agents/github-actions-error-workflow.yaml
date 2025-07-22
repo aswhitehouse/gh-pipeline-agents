@@ -15,7 +15,7 @@ agents:
     output_dir: "./temp/analyzer"
 
   - id: github-actions-error-remediator
-    spec: github-actions-error-remediator.yaml
+    spec: agents.github-actions-error-remediator.agent:GithubActionsErrorRemediatorAgent
     output_dir: "./temp/remediator"
 
 workflows:
@@ -250,7 +250,7 @@ configuration:
         OPENAI_API_KEY: "${OPENAI_API_KEY}"
         DACP_LOG_LEVEL: "INFO"
         DACP_LOG_FILE_ANALYZER: "./logs/analyzer.log"
-        
+
     github-actions-error-remediator:
       env:
         OPENAI_API_KEY: "${OPENAI_API_KEY}"
