@@ -77,13 +77,18 @@ runs:
         if gh run view ${{ inputs.workflow_run_id }} --repo ${{ inputs.repository }} --json id,status,conclusion > /dev/null 2>&1; then
           echo "✅ gh run view command works"
           
-          # Get failed job IDs
-          FAILED_JOB_IDS=$(gh run view ${{ inputs.workflow_run_id }} --repo ${{ inputs.repository }} --json jobs --jq '.jobs[] | select(.conclusion == "failure") | .id' 2>/dev/null || echo "")
-          echo "Raw failed job IDs output: '$FAILED_JOB_IDS'"
-          
           # Debug: Show all jobs and their status
           echo "All jobs in workflow run:"
           gh run view ${{ inputs.workflow_run_id }} --repo ${{ inputs.repository }} --json jobs --jq '.jobs[] | "\(.name): \(.conclusion) (ID: \(.id))"' 2>/dev/null || echo "Failed to get job list"
+          
+          # Get failed job IDs with more detailed debugging
+          echo "Looking for failed jobs..."
+          FAILED_JOB_IDS=$(gh run view ${{ inputs.workflow_run_id }} --repo ${{ inputs.repository }} --json jobs --jq '.jobs[] | select(.conclusion == "failure") | .id' 2>/dev/null || echo "")
+          echo "Raw failed job IDs output: '$FAILED_JOB_IDS'"
+          
+          # Also get failed job names for debugging
+          FAILED_JOB_NAMES=$(gh run view ${{ inputs.workflow_run_id }} --repo ${{ inputs.repository }} --json jobs --jq '.jobs[] | select(.conclusion == "failure") | .name' 2>/dev/null || echo "")
+          echo "Failed job names: '$FAILED_JOB_NAMES'"
           
           if [ -n "$FAILED_JOB_IDS" ]; then
             echo "Found failed job IDs: $FAILED_JOB_IDS"
@@ -266,6 +271,12 @@ runs:
         fi
         
         # Run DACP analysis
+        echo "=== Starting DACP Analysis ==="
+        echo "Current directory: $(pwd)"
+        echo "Workflow file exists: $([ -f agents/github-actions-error-workflow.yaml ] && echo "Yes" || echo "No")"
+        echo "RAW_LOGS length: ${#RAW_LOGS}"
+        echo "RAW_LOGS preview: ${RAW_LOGS:0:200}..."
+        
         dacp run workflow agents/github-actions-error-workflow.yaml \
           --workflow-name quick_error_analysis \
           --input job_name="Failed Workflow" \
@@ -276,6 +287,9 @@ runs:
           --input commit_sha="${{ inputs.commit_sha }}" \
           --input pr_number="${{ inputs.pr_number }}" \
           --output analysis-results.json
+        
+        echo "DACP execution completed with exit code: $?"
+        echo "Analysis results file exists: $([ -f analysis-results.json ] && echo "Yes" || echo "No")"
         
         # Output results
         if [ -f analysis-results.json ]; then
