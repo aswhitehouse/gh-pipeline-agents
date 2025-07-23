@@ -235,11 +235,13 @@ runs:
               if [ -f "$logfile" ]; then
                 echo "=== ERRORS FROM JOB $job_name ($logfile) ===" >> "$TEMP_LOG_FILE"
                 if grep -q -i "error\|fail\|exception\|fatal\|panic\|abort\|timeout\|killed\|segmentation\|assertion\|traceback\|stack trace\|exit code [1-9]\|exit status [1-9]\|command not found\|no such file\|permission denied\|connection refused\|network unreachable\|build failed\|test failed\|deployment failed" "$logfile" 2>/dev/null; then
+                  echo "[LOG EXTRACTION] Found error pattern in $logfile" >&2
                   grep -B 2 -A 5 -i "error\|fail\|exception\|fatal\|panic\|abort\|timeout\|killed\|segmentation\|assertion\|traceback\|stack trace\|exit code [1-9]\|exit status [1-9]\|command not found\|no such file\|permission denied\|connection refused\|network unreachable\|build failed\|test failed\|deployment failed" "$logfile" | \
                     sed -E 's/(password|secret|token|key|api_key|auth)=[^[:space:]]+/***REDACTED***/gi' | \
                     sed -E 's/(https?:\/\/[^[:space:]]*@[^[:space:]]*)/***REDACTED_URL***/gi' | \
                     head -50 >> "$TEMP_LOG_FILE" 2>/dev/null || true
                 else
+                  echo "[LOG EXTRACTION] No error patterns found in $logfile" >&2
                   echo "    No error patterns found" >> "$TEMP_LOG_FILE"
                 fi
                 echo "" >> "$TEMP_LOG_FILE"
@@ -256,11 +258,13 @@ runs:
                   if [ -f "$logfile" ]; then
                     echo "  -> $(basename "$logfile")" >> "$TEMP_LOG_FILE"
                     if grep -q -i "error\|fail\|exception\|fatal\|panic\|abort\|timeout\|killed\|segmentation\|assertion\|traceback\|stack trace\|exit code [1-9]\|exit status [1-9]\|command not found\|no such file\|permission denied\|connection refused\|network unreachable\|build failed\|test failed\|deployment failed" "$logfile" 2>/dev/null; then
+                      echo "[LOG EXTRACTION] Found error pattern in $logfile" >&2
                       grep -B 2 -A 5 -i "error\|fail\|exception\|fatal\|panic\|abort\|timeout\|killed\|segmentation\|assertion\|traceback\|stack trace\|exit code [1-9]\|exit status [1-9]\|command not found\|no such file\|permission denied\|connection refused\|network unreachable\|build failed\|test failed\|deployment failed" "$logfile" | \
                         sed -E 's/(password|secret|token|key|api_key|auth)=[^[:space:]]+/***REDACTED***/gi' | \
                         sed -E 's/(https?:\/\/[^[:space:]]*@[^[:space:]]*)/***REDACTED_URL***/gi' | \
                         head -50 >> "$TEMP_LOG_FILE" 2>/dev/null || true
                     else
+                      echo "[LOG EXTRACTION] No error patterns found in $logfile" >&2
                       echo "    No error patterns found" >> "$TEMP_LOG_FILE"
                     fi
                     echo "" >> "$TEMP_LOG_FILE"
@@ -331,6 +335,10 @@ runs:
           RAW_LOGS="Failed to download logs for workflow run ${{ inputs.workflow_run_id }}"
         fi
         
+        # Print RAW_LOGS before DACP
+        echo "RAW_LOGS content before DACP (first 40 lines):"
+        echo "$RAW_LOGS" | head -40
+
         # Run DACP analysis
         echo "=== Starting DACP Analysis ==="
         echo "Current directory: $(pwd)"
