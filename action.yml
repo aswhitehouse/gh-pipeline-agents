@@ -84,34 +84,46 @@ runs:
         fi
         
         echo "Testing gh run view with verbose output..."
-        gh run view ${{ inputs.workflow_run_id }} --repo ${{ inputs.repository }} --json id,status,conclusion 2>&1 || echo "gh run view failed with error code: $?"
+        gh run view ${{ inputs.workflow_run_id }} --repo ${{ inputs.repository }} --json number,status,conclusion 2>&1 || echo "gh run view failed with error code: $?"
         
         echo "Checking if workflow run exists..."
-        RUN_EXISTS=$(gh run view ${{ inputs.workflow_run_id }} --repo ${{ inputs.repository }} --json id 2>/dev/null | jq -r '.id // "not_found"' 2>/dev/null || echo "not_found")
+        RUN_EXISTS=$(gh run view ${{ inputs.workflow_run_id }} --repo ${{ inputs.repository }} --json number 2>/dev/null | jq -r '.number // "not_found"' 2>/dev/null || echo "not_found")
         echo "Workflow run exists: $RUN_EXISTS"
         
         if [ "$RUN_EXISTS" != "not_found" ]; then
           echo "✅ Workflow run ${{ inputs.workflow_run_id }} exists"
+          WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
         else
           echo "❌ Workflow run ${{ inputs.workflow_run_id }} not found"
           echo "Recent workflow runs:"
           gh run list --repo ${{ inputs.repository }} --limit 5 2>/dev/null || echo "Failed to list recent runs"
+          
+          # Try to get the most recent failed run
+          echo "Looking for most recent failed run..."
+          RECENT_FAILED_RUN=$(gh run list --repo ${{ inputs.repository }} --limit 10 --json number,conclusion,status 2>/dev/null | jq -r '.[] | select(.conclusion == "failure") | .number' | head -1 2>/dev/null || echo "")
+          if [ -n "$RECENT_FAILED_RUN" ]; then
+            echo "Using most recent failed run: $RECENT_FAILED_RUN"
+            WORKFLOW_RUN_ID="$RECENT_FAILED_RUN"
+          else
+            echo "No recent failed runs found, using original ID"
+            WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
+          fi
         fi
         
-        if gh run view ${{ inputs.workflow_run_id }} --repo ${{ inputs.repository }} --json id,status,conclusion > /dev/null 2>&1; then
+        if gh run view $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --json id,status,conclusion > /dev/null 2>&1; then
           echo "✅ gh run view command works"
           
           # Debug: Show all jobs and their status
           echo "All jobs in workflow run:"
-          gh run view ${{ inputs.workflow_run_id }} --repo ${{ inputs.repository }} --json jobs --jq '.jobs[] | "\(.name): \(.conclusion) (ID: \(.id))"' 2>/dev/null || echo "Failed to get job list"
+          gh run view $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --json jobs --jq '.jobs[] | "\(.name): \(.conclusion) (ID: \(.id))"' 2>/dev/null || echo "Failed to get job list"
           
           # Get failed job IDs with more detailed debugging
           echo "Looking for failed jobs..."
-          FAILED_JOB_IDS=$(gh run view ${{ inputs.workflow_run_id }} --repo ${{ inputs.repository }} --json jobs --jq '.jobs[] | select(.conclusion == "failure") | .id' 2>/dev/null || echo "")
+          FAILED_JOB_IDS=$(gh run view $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --json jobs --jq '.jobs[] | select(.conclusion == "failure") | .id' 2>/dev/null || echo "")
           echo "Raw failed job IDs output: '$FAILED_JOB_IDS'"
           
           # Also get failed job names for debugging
-          FAILED_JOB_NAMES=$(gh run view ${{ inputs.workflow_run_id }} --repo ${{ inputs.repository }} --json jobs --jq '.jobs[] | select(.conclusion == "failure") | .name' 2>/dev/null || echo "")
+          FAILED_JOB_NAMES=$(gh run view $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --json jobs --jq '.jobs[] | select(.conclusion == "failure") | .name' 2>/dev/null || echo "")
           echo "Failed job names: '$FAILED_JOB_NAMES'"
           
           if [ -n "$FAILED_JOB_IDS" ]; then
@@ -120,7 +132,7 @@ runs:
             # Download logs for each failed job
             for job_id in $FAILED_JOB_IDS; do
               echo "Downloading logs for job ID: $job_id"
-              if gh run download ${{ inputs.workflow_run_id }} --repo ${{ inputs.repository }} --job-id $job_id --dir "workflow-logs/job_${job_id}/"; then
+              if gh run download $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --job-id $job_id --dir "workflow-logs/job_${job_id}/"; then
                 echo "✅ Downloaded logs for job $job_id"
                 
                 # Check if we got a zip file and unzip it
@@ -157,7 +169,7 @@ runs:
         # Method 2: Fallback to full run download if job-specific download fails
         if [ "$LOG_DOWNLOADED" = "false" ]; then
           echo "Falling back to full run download..."
-          if gh run download ${{ inputs.workflow_run_id }} \
+          if gh run download $WORKFLOW_RUN_ID \
             --repo ${{ inputs.repository }} \
             --dir workflow-logs; then
             echo "✅ Full run log download successful"
@@ -170,7 +182,7 @@ runs:
         # Method 3: GitHub API fallback for full run
         if [ "$LOG_DOWNLOADED" = "false" ]; then
           echo "Trying API fallback method for full run..."
-          API_URL="https://api.github.com/repos/${{ inputs.repository }}/actions/runs/${{ inputs.workflow_run_id }}/logs"
+          API_URL="https://api.github.com/repos/${{ inputs.repository }}/actions/runs/$WORKFLOW_RUN_ID/logs"
           echo "API URL: $API_URL"
           
           if curl -H "Authorization: token $GH_TOKEN" \
