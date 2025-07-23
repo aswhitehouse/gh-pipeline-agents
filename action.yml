@@ -93,6 +93,10 @@ runs:
         if [ "$RUN_EXISTS" != "not_found" ]; then
           echo "✅ Workflow run ${{ inputs.workflow_run_id }} exists"
           WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
+          
+          # Debug: Print the full jobs JSON for this run
+          echo "Full jobs JSON for run $WORKFLOW_RUN_ID:" 
+          gh run view $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --json jobs 2>&1 || echo "Failed to get jobs JSON"
         else
           echo "❌ Workflow run ${{ inputs.workflow_run_id }} not found"
           echo "Recent workflow runs:"
