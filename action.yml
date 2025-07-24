@@ -119,11 +119,11 @@ runs:
           
           # Debug: Show all jobs and their status
           echo "All jobs in workflow run:"
-          gh run view $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --json jobs --jq '.jobs[] | "\(.name): \(.conclusion) (ID: \(.id))"' 2>/dev/null || echo "Failed to get job list"
+          gh run view $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --json jobs --jq '.jobs[] | "\(.name): \(.conclusion) (ID: \(.databaseId))"' 2>/dev/null || echo "Failed to get job list"
           
           # Get failed job IDs with more detailed debugging
           echo "Looking for failed jobs..."
-          FAILED_JOB_IDS=$(gh run view $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --json jobs --jq '.jobs[] | select(.conclusion == "failure") | .id' 2>/dev/null || echo "")
+          FAILED_JOB_IDS=$(gh run view $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --json jobs --jq '.jobs[] | select(.conclusion == "failure") | .databaseId' 2>/dev/null || echo "")
           echo "Raw failed job IDs output: '$FAILED_JOB_IDS'"
           
           # Also get failed job names for debugging
