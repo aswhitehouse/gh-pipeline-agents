@@ -125,10 +125,20 @@ runs:
           echo "Looking for failed jobs..."
           FAILED_JOB_IDS=$(gh run view $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --json jobs --jq '.jobs[] | select(.conclusion == "failure") | .databaseId' 2>/dev/null || echo "")
           echo "Raw failed job IDs output: '$FAILED_JOB_IDS'"
-          
+
           # Also get failed job names for debugging
           FAILED_JOB_NAMES=$(gh run view $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --json jobs --jq '.jobs[] | select(.conclusion == "failure") | .name' 2>/dev/null || echo "")
           echo "Failed job names: '$FAILED_JOB_NAMES'"
+
+          echo "DEBUG: All jobs JSON:"
+          gh run view $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --json jobs | jq '.jobs[] | {name, conclusion, databaseId}' || echo "Failed to get jobs JSON"
+          echo "DEBUG: FAILED_JOB_IDS='$FAILED_JOB_IDS'"
+          echo "DEBUG: FAILED_JOB_NAMES='$FAILED_JOB_NAMES'"
+
+          if [ -z "$FAILED_JOB_IDS" ]; then
+            echo "WARNING: No failed jobs found. Not processing logs for non-failed jobs."
+            exit 1
+          fi
           
           if [ -n "$FAILED_JOB_IDS" ]; then
             echo "Found failed job IDs: $FAILED_JOB_IDS"
