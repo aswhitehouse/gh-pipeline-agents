@@ -236,7 +236,7 @@ runs:
                 echo "=== ERRORS FROM JOB $job_name ($logfile) ===" >> "$TEMP_LOG_FILE"
                 if grep -q -i "error\|fail\|exception\|fatal\|panic\|abort\|timeout\|killed\|segmentation\|assertion\|traceback\|stack trace\|exit code [1-9]\|exit status [1-9]\|command not found\|no such file\|permission denied\|connection refused\|network unreachable\|build failed\|test failed\|deployment failed" "$logfile" 2>/dev/null; then
                   echo "[LOG EXTRACTION] Found error pattern in $logfile" >&2
-                  grep -B 2 -A 8 -i "error\|fail\|exception\|fatal\|panic\|abort\|timeout\|killed\|segmentation\|assertion\|traceback\|stack trace\|exit code [1-9]\|exit status [1-9]\|command not found\|no such file\|permission denied\|connection refused\|network unreachable\|build failed\|test failed\|deployment failed\|FAILED\|AssertionError\|short test summary info"
+                  grep -B 2 -A 8 -i "error\|fail\|exception\|fatal\|panic\|abort\|timeout\|killed\|segmentation\|assertion\|traceback\|stack trace\|exit code [1-9]\|exit status [1-9]\|command not found\|no such file\|permission denied\|connection refused\|network unreachable\|build failed\|test failed\|deployment failed\|FAILED\|AssertionError\|short test summary info" "$logfile" | \
                     sed -E 's/(password|secret|token|key|api_key|auth)=[^[:space:]]+/***REDACTED***/gi' | \
                     sed -E 's/(https?:\/\/[^[:space:]]*@[^[:space:]]*)/***REDACTED_URL***/gi' | \
                     head -50 >> "$TEMP_LOG_FILE" 2>/dev/null || true
