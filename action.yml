@@ -135,47 +135,40 @@ runs:
           echo "DEBUG: FAILED_JOB_IDS='$FAILED_JOB_IDS'"
           echo "DEBUG: FAILED_JOB_NAMES='$FAILED_JOB_NAMES'"
 
+          # Only process logs for jobs with conclusion == 'failure'
           if [ -z "$FAILED_JOB_IDS" ]; then
             echo "WARNING: No failed jobs found. Not processing logs for non-failed jobs."
             exit 1
           fi
-          
-          if [ -n "$FAILED_JOB_IDS" ]; then
-            echo "Found failed job IDs: $FAILED_JOB_IDS"
-            
-            # Download logs for each failed job
-            for job_id in $FAILED_JOB_IDS; do
-              echo "Downloading logs for job ID: $job_id"
-              if gh run download $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --job-id $job_id --dir "workflow-logs/job_${job_id}/"; then
-                echo "✅ Downloaded logs for job $job_id"
-                
-                # Check if we got a zip file and unzip it
-                if [ -f "workflow-logs/job_${job_id}/logs.zip" ]; then
-                  echo "Unzipping logs for job $job_id..."
-                  if unzip -q "workflow-logs/job_${job_id}/logs.zip" -d "workflow-logs/job_${job_id}/" 2>/dev/null; then
-                    echo "✅ Unzipped logs for job $job_id"
-                    rm -f "workflow-logs/job_${job_id}/logs.zip"  # Clean up zip file
-                    
-                    # Show what files we got
-                    echo "Log files for job $job_id:"
-                    ls -la "workflow-logs/job_${job_id}/" || echo "No files found"
-                  else
-                    echo "❌ Failed to unzip logs for job $job_id"
-                  fi
-                elif [ -f "workflow-logs/job_${job_id}/*.txt" ]; then
-                  echo "✅ Logs for job $job_id are already in text format"
+
+          echo "Processing logs for failed jobs only:"
+          for job_id in $FAILED_JOB_IDS; do
+            job_name=$(gh run view $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --json jobs --jq ".jobs[] | select(.databaseId == $job_id) | .name" 2>/dev/null)
+            echo "  - Job ID: $job_id, Name: $job_name"
+            echo "Downloading logs for job ID: $job_id"
+            if gh run download $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --job-id $job_id --dir "workflow-logs/job_${job_id}/"; then
+              echo "✅ Downloaded logs for job $job_id"
+              if [ -f "workflow-logs/job_${job_id}/logs.zip" ]; then
+                echo "Unzipping logs for job $job_id..."
+                if unzip -q "workflow-logs/job_${job_id}/logs.zip" -d "workflow-logs/job_${job_id}/" 2>/dev/null; then
+                  echo "✅ Unzipped logs for job $job_id"
+                  rm -f "workflow-logs/job_${job_id}/logs.zip"
+                  echo "Log files for job $job_id:"
+                  ls -la "workflow-logs/job_${job_id}/" || echo "No files found"
                 else
-                  echo "⚠️ No log files found for job $job_id"
+                  echo "❌ Failed to unzip logs for job $job_id"
                 fi
-                
-                LOG_DOWNLOADED=true
+              elif [ -f "workflow-logs/job_${job_id}/*.txt" ]; then
+                echo "✅ Logs for job $job_id are already in text format"
               else
-                echo "❌ Failed to download logs for job $job_id"
+                echo "⚠️ No log files found for job $job_id"
               fi
-            done
-          else
-            echo "No failed jobs found in the workflow run"
-          fi
+              LOG_DOWNLOADED=true
+            else
+              echo "❌ Failed to download logs for job $job_id"
+            fi
+            echo "---"
+          done
         else
           echo "❌ gh run view command failed"
         fi
