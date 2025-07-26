@@ -34,343 +34,81 @@ runs:
   steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      
+
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-        
-    - name: Install DACP and dependencies
+
+    - name: Install dependencies
       shell: bash
       run: |
-        pip install dacp
-        pip install openai pydantic jinja2 python-dotenv behavioural-contracts
-        
+        pip install openai pydantic jinja2 python-dotenv behavioural-contracts dacp
+
     - name: Download error analysis agents
       shell: bash
       run: |
-        # Download the agents from this repository
         git clone https://github.com/aswhitehouse/gh-pipeline-agents.git temp-agents
         cp -r temp-agents/agents ./
         rm -rf temp-agents
-        
-    - name: Run error analysis
+
+    - name: Download full workflow logs
+      id: download_logs
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -e
+        mkdir -p workflow-logs
+        WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
+        REPO="${{ inputs.repository }}"
+        LOGFILE="workflow-logs/full-log.txt"
+        # Try GitHub CLI first
+        if gh run download "$WORKFLOW_RUN_ID" --repo "$REPO" --dir workflow-logs/; then
+          echo "✅ Downloaded logs via gh cli"
+        else
+          echo "⚠️ gh cli failed, falling back to API"
+          curl -H "Authorization: token $GH_TOKEN" -L \
+            "https://api.github.com/repos/$REPO/actions/runs/$WORKFLOW_RUN_ID/logs" \
+            -o workflow-logs/api-download.zip
+          unzip -q workflow-logs/api-download.zip -d workflow-logs/ || true
+        fi
+        # Concatenate all .txt logs for simplicity
+        cat workflow-logs/*.txt > "$LOGFILE" || echo "No .txt logs found"
+
+    - name: Extract errors from logs
+      id: extract_errors
+      shell: bash
+      run: |
+        set -e
+        LOGFILE="workflow-logs/full-log.txt"
+        OUTFILE="workflow-logs/trimmed-errors.txt"
+        # Extract error context (8 lines after/before error patterns)
+        if grep -i -E -B2 -A8 'error|fail|exception|fatal|panic|abort|timeout|killed|segmentation|assertion|traceback|exit code [1-9]|exit status [1-9]|command not found|no such file|permission denied|connection refused|network unreachable|build failed|test failed|deployment failed|AssertionError' "$LOGFILE" | head -200 > "$OUTFILE"; then
+          echo "✅ Errors extracted"
+        else
+          echo "No errors found, using log tail"
+          tail -200 "$LOGFILE" > "$OUTFILE"
+        fi
+        # Redact secrets
+        sed -i -E 's/(password|secret|token|key|api_key|auth)=[^[:space:]]+/***REDACTED***/gi' "$OUTFILE"
+        # Add to outputs (up to 30,000 chars)
+        TRIMMED=$(head -c 30000 "$OUTFILE")
+        echo "logs<<EOF" >> $GITHUB_OUTPUT
+        echo "$TRIMMED" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Run error analysis agent
       id: analysis
       shell: bash
       env:
         OPENAI_API_KEY: ${{ inputs.openai_api_key }}
-        GH_TOKEN: ${{ github.token }}
       run: |
-        # Try multiple methods to get logs
-        LOG_DOWNLOADED=false
-        
-        # Create logs directory first
-        mkdir -p workflow-logs
-        
-        # Method 1: Get failed job IDs and download their logs directly
-        echo "Getting failed job IDs for workflow run: ${{ inputs.workflow_run_id }}"
-        echo "Repository: ${{ inputs.repository }}"
-        echo "GH_TOKEN available: $([ -n "$GH_TOKEN" ] && echo "Yes" || echo "No")"
-        
-        # Test the gh run view command first
-        echo "Testing gh run view command..."
-        echo "Testing basic repository access..."
-        if curl -H "Authorization: token $GH_TOKEN" \
-          -H "Accept: application/vnd.github.v3+json" \
-          "https://api.github.com/repos/${{ inputs.repository }}" > /dev/null 2>&1; then
-          echo "✅ Repository access works"
-        else
-          echo "❌ Repository access failed"
-        fi
-        
-        echo "Testing gh run view with verbose output..."
-        gh run view ${{ inputs.workflow_run_id }} --repo ${{ inputs.repository }} --json number,status,conclusion 2>&1 || echo "gh run view failed with error code: $?"
-        
-        echo "Checking if workflow run exists..."
-        RUN_EXISTS=$(gh run view ${{ inputs.workflow_run_id }} --repo ${{ inputs.repository }} --json number 2>/dev/null | jq -r '.number // "not_found"' 2>/dev/null || echo "not_found")
-        echo "Workflow run exists: $RUN_EXISTS"
-        
-        if [ "$RUN_EXISTS" != "not_found" ]; then
-          echo "✅ Workflow run ${{ inputs.workflow_run_id }} exists"
-          WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
-          
-          # Debug: Print the full jobs JSON for this run
-          echo "Full jobs JSON for run $WORKFLOW_RUN_ID:" 
-          gh run view $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --json jobs 2>&1 || echo "Failed to get jobs JSON"
-        else
-          echo "❌ Workflow run ${{ inputs.workflow_run_id }} not found"
-          echo "Recent workflow runs:"
-          gh run list --repo ${{ inputs.repository }} --limit 5 2>/dev/null || echo "Failed to list recent runs"
-          
-          # Try to get the most recent failed run
-          echo "Looking for most recent failed run..."
-          RECENT_FAILED_RUN=$(gh run list --repo ${{ inputs.repository }} --limit 10 --json number,conclusion,status 2>/dev/null | jq -r '.[] | select(.conclusion == "failure") | .number' | head -1 2>/dev/null || echo "")
-          if [ -n "$RECENT_FAILED_RUN" ]; then
-            echo "Using most recent failed run: $RECENT_FAILED_RUN"
-            WORKFLOW_RUN_ID="$RECENT_FAILED_RUN"
-          else
-            echo "No recent failed runs found, using original ID"
-            WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
-          fi
-        fi
-        
-        if gh run view $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --json id,status,conclusion > /dev/null 2>&1; then
-          echo "✅ gh run view command works"
-          
-          # Debug: Show all jobs and their status
-          echo "All jobs in workflow run:"
-          gh run view $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --json jobs --jq '.jobs[] | "\(.name): \(.conclusion) (ID: \(.databaseId))"' 2>/dev/null || echo "Failed to get job list"
-          
-          # Get failed job IDs with more detailed debugging
-          echo "Looking for failed jobs..."
-          FAILED_JOB_IDS=$(gh run view $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --json jobs --jq '.jobs[] | select(.conclusion == "failure") | .databaseId' 2>/dev/null || echo "")
-          echo "Raw failed job IDs output: '$FAILED_JOB_IDS'"
-
-          # Also get failed job names for debugging
-          FAILED_JOB_NAMES=$(gh run view $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --json jobs --jq '.jobs[] | select(.conclusion == "failure") | .name' 2>/dev/null || echo "")
-          echo "Failed job names: '$FAILED_JOB_NAMES'"
-
-          echo "DEBUG: All jobs JSON:"
-          gh run view $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --json jobs | jq '.jobs[] | {name, conclusion, databaseId}' || echo "Failed to get jobs JSON"
-          echo "DEBUG: FAILED_JOB_IDS='$FAILED_JOB_IDS'"
-          echo "DEBUG: FAILED_JOB_NAMES='$FAILED_JOB_NAMES'"
-
-          # Only process logs for jobs with conclusion == 'failure'
-          if [ -z "$FAILED_JOB_IDS" ]; then
-            echo "WARNING: No failed jobs found. Not processing logs for non-failed jobs."
-            exit 1
-          fi
-
-          echo "Processing logs for failed jobs only:"
-          for job_id in $FAILED_JOB_IDS; do
-            job_name=$(gh run view $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --json jobs --jq ".jobs[] | select(.databaseId == $job_id) | .name" 2>/dev/null)
-            echo "  - Job ID: $job_id, Name: $job_name"
-            echo "Downloading logs for job ID: $job_id"
-            if gh run download $WORKFLOW_RUN_ID --repo ${{ inputs.repository }} --job-id $job_id --dir "workflow-logs/job_${job_id}/"; then
-              echo "✅ Downloaded logs for job $job_id"
-              if [ -f "workflow-logs/job_${job_id}/logs.zip" ]; then
-                echo "Unzipping logs for job $job_id..."
-                if unzip -q "workflow-logs/job_${job_id}/logs.zip" -d "workflow-logs/job_${job_id}/" 2>/dev/null; then
-                  echo "✅ Unzipped logs for job $job_id"
-                  rm -f "workflow-logs/job_${job_id}/logs.zip"
-                  echo "Log files for job $job_id:"
-                  ls -la "workflow-logs/job_${job_id}/" || echo "No files found"
-                else
-                  echo "❌ Failed to unzip logs for job $job_id"
-                fi
-              elif [ -f "workflow-logs/job_${job_id}/*.txt" ]; then
-                echo "✅ Logs for job $job_id are already in text format"
-              else
-                echo "⚠️ No log files found for job $job_id"
-              fi
-              LOG_DOWNLOADED=true
-            else
-              echo "❌ Failed to download logs for job $job_id"
-            fi
-            echo "---"
-          done
-        else
-          echo "❌ gh run view command failed"
-        fi
-        
-        # Method 2: Fallback to full run download if job-specific download fails
-        if [ "$LOG_DOWNLOADED" = "false" ]; then
-          echo "Falling back to full run download..."
-          if gh run download $WORKFLOW_RUN_ID \
-            --repo ${{ inputs.repository }} \
-            --dir workflow-logs; then
-            echo "✅ Full run log download successful"
-            LOG_DOWNLOADED=true
-          else
-            echo "❌ Full run log download failed with exit code: $?"
-          fi
-        fi
-        
-        # Method 3: GitHub API fallback for full run
-        if [ "$LOG_DOWNLOADED" = "false" ]; then
-          echo "Trying API fallback method for full run..."
-          API_URL="https://api.github.com/repos/${{ inputs.repository }}/actions/runs/$WORKFLOW_RUN_ID/logs"
-          echo "API URL: $API_URL"
-          
-          if curl -H "Authorization: token $GH_TOKEN" \
-            -H "Accept: application/vnd.github.v3+json" \
-            -L "$API_URL" \
-            -o workflow-logs/api-download.zip; then
-            echo "✅ API download successful"
-            
-            # Check what was actually downloaded
-            echo "Downloaded file size: $(wc -c < workflow-logs/api-download.zip) bytes"
-            
-            if unzip -q workflow-logs/api-download.zip -d workflow-logs/ 2>/dev/null; then
-              echo "✅ API log extraction successful"
-              LOG_DOWNLOADED=true
-
-              # Only process logs for failed jobs, not all logs
-              if [ -n "$FAILED_JOB_NAMES" ]; then
-                echo "Processing logs for failed jobs only (API fallback):"
-                for job_name in $FAILED_JOB_NAMES; do
-                  # Replace spaces and parentheses with underscores for file matching
-                  safe_job_name=$(echo "$job_name" | tr ' ()' '___')
-                  logfile=$(find workflow-logs -type f -name "*${safe_job_name}*.txt" | head -1)
-                  if [ -f "$logfile" ]; then
-                    echo "  - Found log for failed job: $job_name ($logfile)"
-                    # Move this log to be the primary log for processing
-                    cp "$logfile" "workflow-logs/primary_failed_job.txt"
-                    echo "✅ Set primary log to: $logfile"
-                  else
-                    echo "  - No log file found for failed job: $job_name"
-                  fi
-                done
-              else
-                echo "WARNING: No failed job names available for API fallback processing"
-              fi
-
-              # Print the first 20 lines of the primary failed job log
-              echo "First 20 lines of extracted logs:"
-              if [ -f "workflow-logs/primary_failed_job.txt" ]; then
-                head -20 "workflow-logs/primary_failed_job.txt"
-              elif [ -d workflow-logs ]; then
-                head -20 workflow-logs/*.txt || echo "No .txt logs found"
-              else
-                echo "workflow-logs directory not found"
-              fi
-
-            else
-              echo "❌ API log extraction failed"
-              echo "Unzip error details:"
-              unzip -t workflow-logs/api-download.zip 2>&1 || true
-            fi
-          else
-            echo "❌ API download failed with exit code: $?"
-          fi
-        fi
-        
-        # Process logs
-        TEMP_LOG_FILE="processed-logs.txt"
-        echo "" > "$TEMP_LOG_FILE"
-        
-        if [ "$LOG_DOWNLOADED" = "true" ]; then
-          # Extract error information from logs
-          if [ -n "$FAILED_JOB_NAMES" ]; then
-            # Process logs for each failed job by name
-            for job_name in $FAILED_JOB_NAMES; do
-              # Replace spaces and parentheses with underscores for file matching
-              safe_job_name=$(echo "$job_name" | tr ' ()' '___')
-              logfile=$(find workflow-logs -type f -name "*${safe_job_name}*.txt" | head -1)
-              if [ -f "$logfile" ]; then
-                echo "=== ERRORS FROM JOB $job_name ($logfile) ===" >> "$TEMP_LOG_FILE"
-                if grep -q -i "error\|fail\|exception\|fatal\|panic\|abort\|timeout\|killed\|segmentation\|assertion\|traceback\|stack trace\|exit code [1-9]\|exit status [1-9]\|command not found\|no such file\|permission denied\|connection refused\|network unreachable\|build failed\|test failed\|deployment failed" "$logfile" 2>/dev/null; then
-                  echo "[LOG EXTRACTION] Found error pattern in $logfile" >&2
-                  grep -B 2 -A 8 -i "error\|fail\|exception\|fatal\|panic\|abort\|timeout\|killed\|segmentation\|assertion\|traceback\|stack trace\|exit code [1-9]\|exit status [1-9]\|command not found\|no such file\|permission denied\|connection refused\|network unreachable\|build failed\|test failed\|deployment failed\|FAILED\|AssertionError\|short test summary info"
-                    sed -E 's/(password|secret|token|key|api_key|auth)=[^[:space:]]+/***REDACTED***/gi' | \
-                    sed -E 's/(https?:\/\/[^[:space:]]*@[^[:space:]]*)/***REDACTED_URL***/gi' | \
-                    head -50 >> "$TEMP_LOG_FILE" 2>/dev/null || true
-                else
-                  echo "[LOG EXTRACTION] No error patterns found in $logfile" >&2
-                  echo "    No error patterns found" >> "$TEMP_LOG_FILE"
-                fi
-                echo "" >> "$TEMP_LOG_FILE"
-              else
-                echo "No log file found for failed job: $job_name" >> "$TEMP_LOG_FILE"
-              fi
-            done
-          elif [ -n "$FAILED_JOB_IDS" ]; then
-            # Process job-specific logs by ID (if available)
-            for job_id in $FAILED_JOB_IDS; do
-              if [ -d "workflow-logs/job_${job_id}" ]; then
-                echo "=== ERRORS FROM JOB $job_id ===" >> "$TEMP_LOG_FILE"
-                for logfile in workflow-logs/job_${job_id}/*.txt; do
-                  if [ -f "$logfile" ]; then
-                    echo "  -> $(basename "$logfile")" >> "$TEMP_LOG_FILE"
-                    if grep -q -i "error\|fail\|exception\|fatal\|panic\|abort\|timeout\|killed\|segmentation\|assertion\|traceback\|stack trace\|exit code [1-9]\|exit status [1-9]\|command not found\|no such file\|permission denied\|connection refused\|network unreachable\|build failed\|test failed\|deployment failed" "$logfile" 2>/dev/null; then
-                      echo "[LOG EXTRACTION] Found error pattern in $logfile" >&2
-                      grep -B 2 -A 5 -i "error\|fail\|exception\|fatal\|panic\|abort\|timeout\|killed\|segmentation\|assertion\|traceback\|stack trace\|exit code [1-9]\|exit status [1-9]\|command not found\|no such file\|permission denied\|connection refused\|network unreachable\|build failed\|test failed\|deployment failed" "$logfile" | \
-                        sed -E 's/(password|secret|token|key|api_key|auth)=[^[:space:]]+/***REDACTED***/gi' | \
-                        sed -E 's/(https?:\/\/[^[:space:]]*@[^[:space:]]*)/***REDACTED_URL***/gi' | \
-                        head -50 >> "$TEMP_LOG_FILE" 2>/dev/null || true
-                    else
-                      echo "[LOG EXTRACTION] No error patterns found in $logfile" >&2
-                      echo "    No error patterns found" >> "$TEMP_LOG_FILE"
-                    fi
-                    echo "" >> "$TEMP_LOG_FILE"
-                  fi
-                done
-              fi
-            done
-          else
-            # Fallback: process all logs in workflow-logs directory
-            for logfile in $(find workflow-logs -name "*.txt" -type f); do
-              echo "Processing: $logfile"
-              
-              # Check if file contains errors
-              if grep -q -i "error\|fail\|exception\|fatal\|panic\|abort\|timeout\|killed\|segmentation\|assertion\|traceback\|stack trace\|exit code [1-9]\|exit status [1-9]\|command not found\|no such file\|permission denied\|connection refused\|network unreachable\|build failed\|test failed\|deployment failed" "$logfile" 2>/dev/null; then
-                echo "=== ERRORS FROM: $(basename "$logfile") ===" >> "$TEMP_LOG_FILE"
-                # Extract lines around errors (with sensitive data filtering)
-                grep -B 2 -A 5 -i "error\|fail\|exception\|fatal" "$logfile" | \
-                  # Remove potential sensitive patterns
-                  sed -E 's/(password|secret|token|key|api_key|auth)=[^[:space:]]+/***REDACTED***/gi' | \
-                  sed -E 's/(https?:\/\/[^[:space:]]*@[^[:space:]]*)/***REDACTED_URL***/gi' | \
-                  head -50 >> "$TEMP_LOG_FILE" 2>/dev/null || true
-                echo -e "\n" >> "$TEMP_LOG_FILE"
-              fi
-            done
-          fi
-          
-          # If no errors found, get the last part of the most recent log file
-          if [ ! -s "$TEMP_LOG_FILE" ]; then
-            echo "No obvious error patterns found, getting log tails..."
-            # Find the most recent log file
-            MOST_RECENT_LOG=""
-            for logfile in $(find workflow-logs -name "*.txt" -type f); do
-              if [ -z "$MOST_RECENT_LOG" ] || [ "$logfile" -nt "$MOST_RECENT_LOG" ]; then
-                MOST_RECENT_LOG="$logfile"
-              fi
-            done
-            
-            if [ -n "$MOST_RECENT_LOG" ] && [ -f "$MOST_RECENT_LOG" ]; then
-              echo "=== TAIL OF: $(basename "$MOST_RECENT_LOG") ===" >> "$TEMP_LOG_FILE"
-              tail -200 "$MOST_RECENT_LOG" >> "$TEMP_LOG_FILE" 2>/dev/null || true
-            fi
-          fi
-          
-          # Read processed logs
-          if [ -s "$TEMP_LOG_FILE" ]; then
-            RAW_LOGS=$(cat "$TEMP_LOG_FILE")
-            echo "✅ Successfully extracted logs (${#RAW_LOGS} characters)"
-          else
-            RAW_LOGS="Failed to extract error information from logs. No error patterns found in downloaded logs."
-            echo "❌ No error patterns found in logs"
-          fi
-          
-          # Clean up temp file
-          rm -f "$TEMP_LOG_FILE"
-          
-          # Limit output size (GitHub Actions variable limit)
-          MAX_SIZE=30000
-          if [ ${#RAW_LOGS} -gt $MAX_SIZE ]; then
-            echo "logs=${RAW_LOGS:0:$MAX_SIZE}... [TRUNCATED - Original size: ${#RAW_LOGS} chars]" >> $GITHUB_OUTPUT
-            echo "Log truncated due to size (${#RAW_LOGS} > $MAX_SIZE chars)"
-          else
-            echo "logs<<EOF" >> $GITHUB_OUTPUT
-            echo "$RAW_LOGS" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
-            echo "Log extraction completed (${#RAW_LOGS} chars)"
-          fi
-        else
-          RAW_LOGS="Failed to download logs for workflow run ${{ inputs.workflow_run_id }}"
-        fi
-        
-        # Print RAW_LOGS before DACP
-        echo "RAW_LOGS content before DACP (first 40 lines):"
+        RAW_LOGS=$(cat workflow-logs/trimmed-errors.txt)
+        # (Optional) Debug print
+        echo "First lines of logs:"
         echo "$RAW_LOGS" | head -40
-
-        # Run DACP analysis
-        echo "=== Starting DACP Analysis ==="
-        echo "Current directory: $(pwd)"
-        echo "Workflow file exists: $([ -f agents/github-actions-error-workflow.yaml ] && echo "Yes" || echo "No")"
-        echo "RAW_LOGS length: ${#RAW_LOGS}"
-        echo "RAW_LOGS preview: ${RAW_LOGS:0:200}..."
-        
+        # Run DACP agent
         dacp run workflow agents/github-actions-error-workflow.yaml \
           --workflow-name quick_error_analysis \
           --input job_name="Failed Workflow" \
@@ -381,32 +119,10 @@ runs:
           --input commit_sha="${{ inputs.commit_sha }}" \
           --input pr_number="${{ inputs.pr_number }}" \
           --output analysis-results.json
-        
-        echo "DACP execution completed with exit code: $?"
-        echo "Analysis results file exists: $([ -f analysis-results.json ] && echo "Yes" || echo "No")"
-        
-        # Output results
         if [ -f analysis-results.json ]; then
-          echo "Analysis completed successfully"
           cat analysis-results.json
-          
-          # Extract summary for Slack notification
-          SUMMARY=$(cat analysis-results.json | jq -r '.context.output.developer_message.summary // "No summary available"' 2>/dev/null || echo "Analysis completed but summary could not be extracted")
-          ROOT_CAUSE=$(cat analysis-results.json | jq -r '.context.output.analysis_result.root_cause // "Unknown"' 2>/dev/null || echo "Unknown")
-          CATEGORY=$(cat analysis-results.json | jq -r '.context.output.analysis_result.error_category // "Unknown"' 2>/dev/null || echo "Unknown")
-          
-          # Create formatted summary for Slack
-          SLACK_SUMMARY="**Root Cause:** $ROOT_CAUSE\n**Category:** $CATEGORY\n**Summary:** $SUMMARY"
-          
-          echo "slack_summary<<EOF" >> $GITHUB_OUTPUT
-          echo "$SLACK_SUMMARY" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          
-        else
-          echo "Analysis failed"
-          echo "slack_summary=Analysis failed - no results generated" >> $GITHUB_OUTPUT
         fi
-        
+
     - name: Upload analysis results
       uses: actions/upload-artifact@v4
       if: always()
@@ -416,7 +132,7 @@ runs:
           analysis-results.json
           workflow-logs/
         retention-days: 30
-        
+
     - name: Send Slack notification
       if: always() && inputs.slack_webhook_url != ''
       uses: 8398a7/action-slack@v3
@@ -426,13 +142,10 @@ runs:
         channel: ${{ inputs.slack_channel || '' }}
         text: |
           🤖 **GitHub Actions Error Analysis**
-          
           📦 **Repository:** ${{ inputs.repository }}
           🔗 **Workflow Run:** ${{ inputs.workflow_run_id }}
           🌿 **Branch:** ${{ inputs.branch }}
-          
-          ${{ steps.analysis.outputs.slack_summary || 'Analysis completed but no summary available.' }}
-          
+          See artifact for details!
           🔗 <https://github.com/${{ inputs.repository }}/actions/runs/${{ inputs.workflow_run_id }}|View Workflow Run>
       env:
-        SLACK_WEBHOOK_URL: ${{ inputs.slack_webhook_url }} 
+        SLACK_WEBHOOK_URL: ${{ inputs.slack_webhook_url }}
