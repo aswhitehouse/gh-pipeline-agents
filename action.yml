@@ -205,9 +205,31 @@ runs:
               echo "✅ API log extraction successful"
               LOG_DOWNLOADED=true
 
-              # Print the first 20 lines of extracted logs
+              # Only process logs for failed jobs, not all logs
+              if [ -n "$FAILED_JOB_NAMES" ]; then
+                echo "Processing logs for failed jobs only (API fallback):"
+                for job_name in $FAILED_JOB_NAMES; do
+                  # Replace spaces and parentheses with underscores for file matching
+                  safe_job_name=$(echo "$job_name" | tr ' ()' '___')
+                  logfile=$(find workflow-logs -type f -name "*${safe_job_name}*.txt" | head -1)
+                  if [ -f "$logfile" ]; then
+                    echo "  - Found log for failed job: $job_name ($logfile)"
+                    # Move this log to be the primary log for processing
+                    cp "$logfile" "workflow-logs/primary_failed_job.txt"
+                    echo "✅ Set primary log to: $logfile"
+                  else
+                    echo "  - No log file found for failed job: $job_name"
+                  fi
+                done
+              else
+                echo "WARNING: No failed job names available for API fallback processing"
+              fi
+
+              # Print the first 20 lines of the primary failed job log
               echo "First 20 lines of extracted logs:"
-              if [ -d workflow-logs ]; then
+              if [ -f "workflow-logs/primary_failed_job.txt" ]; then
+                head -20 "workflow-logs/primary_failed_job.txt"
+              elif [ -d workflow-logs ]; then
                 head -20 workflow-logs/*.txt || echo "No .txt logs found"
               else
                 echo "workflow-logs directory not found"
