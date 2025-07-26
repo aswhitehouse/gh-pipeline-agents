@@ -76,46 +76,59 @@ runs:
         # Concatenate all .txt logs for simplicity
         cat workflow-logs/*.txt > "$LOGFILE" || echo "No .txt logs found"
 
-    - name: Extract failed job logs
+    - name: Extract failed matrix job logs
       id: extract_failed
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
         set -e
-        LOGDIR="workflow-logs"
-        FULLLOG="$LOGDIR/full-log.txt"
-        OUTFILE="$LOGDIR/failed-jobs-only.txt"
-
+        mkdir -p workflow-logs/failed-matrix
         WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
         REPO="${{ inputs.repository }}"
 
-        # Get failed job names (may be empty for simple workflows)
-        FAILED_JOB_NAMES=$(gh run view "$WORKFLOW_RUN_ID" --repo "$REPO" --json jobs --jq '.jobs[] | select(.conclusion == "failure") | .name')
-        touch "$OUTFILE"
+        # Get all jobs with conclusion == failure
+        JOBS_JSON=$(gh run view "$WORKFLOW_RUN_ID" --repo "$REPO" --json jobs)
+        echo "$JOBS_JSON" > workflow-logs/jobs.json  # For debug
 
-        if [ -n "$FAILED_JOB_NAMES" ]; then
-          echo "Extracting logs for failed jobs:"
-          for job in $FAILED_JOB_NAMES; do
-            safe_job=$(echo "$job" | tr ' /()[]:' '____')
-            logfile=$(find "$LOGDIR" -type f -iname "*$safe_job*.txt" | head -1)
-            if [ -f "$logfile" ]; then
-              echo "==== $job ====" >> "$OUTFILE"
-              cat "$logfile" >> "$OUTFILE"
-              echo -e "\n" >> "$OUTFILE"
+        # For each failed job, download the log
+        echo "$JOBS_JSON" | jq -c '.jobs[] | select(.conclusion == "failure") | {name, id: .databaseId}' | while read -r job; do
+          JOB_NAME=$(echo "$job" | jq -r .name)
+          JOB_ID=$(echo "$job" | jq -r .id)
+          SAFE_JOB_NAME=$(echo "$JOB_NAME" | tr ' /()[]:' '____')
+          echo "Processing failed job: $JOB_NAME (ID: $JOB_ID)"
+          # Download just this job's log
+          mkdir -p "workflow-logs/failed-matrix/$SAFE_JOB_NAME"
+          if gh run download "$WORKFLOW_RUN_ID" --repo "$REPO" --job "$JOB_NAME" --dir "workflow-logs/failed-matrix/$SAFE_JOB_NAME/"; then
+            # Cat all txt logs for this job into a single file
+            find "workflow-logs/failed-matrix/$SAFE_JOB_NAME/" -name "*.txt" -exec cat {} + > "workflow-logs/failed-matrix/$SAFE_JOB_NAME/failed-job-log.txt"
+            # Grep for failure/traceback/etc, fallback to log tail
+            OUTFILE="workflow-logs/failed-matrix/$SAFE_JOB_NAME/trimmed.txt"
+            if grep -i -E -A8 -B4 'FAILED|FAIL|AssertionError|Traceback|error|exception|exit code [1-9]|conclusion: failure' "workflow-logs/failed-matrix/$SAFE_JOB_NAME/failed-job-log.txt" | head -200 > "$OUTFILE"; then
+              echo "Extracted failure lines for $JOB_NAME"
+            else
+              tail -200 "workflow-logs/failed-matrix/$SAFE_JOB_NAME/failed-job-log.txt" > "$OUTFILE"
             fi
-          done
-        fi
+            # Redact secrets
+            sed -i -E 's/(password|secret|token|key|api_key|auth)=[^[:space:]]+/***REDACTED***/gi' "$OUTFILE"
+          else
+            echo "Failed to download log for $JOB_NAME"
+          fi
+        done
 
-        # Fallback if above is empty
-        if [ ! -s "$OUTFILE" ]; then
-          echo "No per-job logs, extracting all lines with failure..."
-          grep -i -A8 -B4 'conclusion: failure\|failed\|failure\|exit code [1-9]' "$FULLLOG" | head -300 > "$OUTFILE" || tail -200 "$FULLLOG" > "$OUTFILE"
-        fi
+        # Collate all failed job logs into one
+        FINAL_OUT="workflow-logs/final-collated-failures.txt"
+        echo "" > "$FINAL_OUT"
+        for trimmed in workflow-logs/failed-matrix/*/trimmed.txt; do
+          JOBDIR=$(dirname "$trimmed")
+          JOBNAME=$(basename "$JOBDIR")
+          echo "==== $JOBNAME ====" >> "$FINAL_OUT"
+          cat "$trimmed" >> "$FINAL_OUT"
+          echo -e "\n" >> "$FINAL_OUT"
+        done
 
-        # Redact secrets
-        sed -i -E 's/(password|secret|token|key|api_key|auth)=[^[:space:]]+/***REDACTED***/gi' "$OUTFILE"
-        TRIMMED=$(head -c 30000 "$OUTFILE")
+        # Limit output to 30000 chars
+        TRIMMED=$(head -c 30000 "$FINAL_OUT")
         echo "logs<<EOF" >> $GITHUB_OUTPUT
         echo "$TRIMMED" >> $GITHUB_OUTPUT
         echo "EOF" >> $GITHUB_OUTPUT
