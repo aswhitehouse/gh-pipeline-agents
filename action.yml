@@ -52,8 +52,7 @@ runs:
         cp -r temp-agents/agents ./
         rm -rf temp-agents
 
-    - name: Download full workflow logs
-      id: download_logs
+    - name: Download all workflow logs
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
@@ -62,21 +61,9 @@ runs:
         mkdir -p workflow-logs
         WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
         REPO="${{ inputs.repository }}"
-        LOGFILE="workflow-logs/full-log.txt"
-        # Try GitHub CLI first
-        if gh run download "$WORKFLOW_RUN_ID" --repo "$REPO" --dir workflow-logs/; then
-          echo "✅ Downloaded logs via gh cli"
-        else
-          echo "⚠️ gh cli failed, falling back to API"
-          curl -H "Authorization: token $GH_TOKEN" -L \
-            "https://api.github.com/repos/$REPO/actions/runs/$WORKFLOW_RUN_ID/logs" \
-            -o workflow-logs/api-download.zip
-          unzip -q workflow-logs/api-download.zip -d workflow-logs/ || true
-        fi
-        # Concatenate all .txt logs for simplicity
-        cat workflow-logs/*.txt > "$LOGFILE" || echo "No .txt logs found"
+        gh run download "$WORKFLOW_RUN_ID" --repo "$REPO" --dir workflow-logs/
 
-    - name: Extract failed matrix job logs
+    - name: Extract failed job logs (matrix and non-matrix safe)
       id: extract_failed
       shell: bash
       env:
@@ -91,28 +78,24 @@ runs:
         JOBS_JSON=$(gh run view "$WORKFLOW_RUN_ID" --repo "$REPO" --json jobs)
         echo "$JOBS_JSON" > workflow-logs/jobs.json  # For debug
 
-        # For each failed job, download the log
         echo "$JOBS_JSON" | jq -c '.jobs[] | select(.conclusion == "failure") | {name, id: .databaseId}' | while read -r job; do
           JOB_NAME=$(echo "$job" | jq -r .name)
-          JOB_ID=$(echo "$job" | jq -r .id)
           SAFE_JOB_NAME=$(echo "$JOB_NAME" | tr ' /()[]:' '____')
-          echo "Processing failed job: $JOB_NAME (ID: $JOB_ID)"
-          # Download just this job's log
-          mkdir -p "workflow-logs/failed-matrix/$SAFE_JOB_NAME"
-          if gh run download "$WORKFLOW_RUN_ID" --repo "$REPO" --job "$JOB_NAME" --dir "workflow-logs/failed-matrix/$SAFE_JOB_NAME/"; then
-            # Cat all txt logs for this job into a single file
-            find "workflow-logs/failed-matrix/$SAFE_JOB_NAME/" -name "*.txt" -exec cat {} + > "workflow-logs/failed-matrix/$SAFE_JOB_NAME/failed-job-log.txt"
-            # Grep for failure/traceback/etc, fallback to log tail
+          echo "Processing failed job: $JOB_NAME"
+          # Find file matching the job name (case-insensitive, handle spaces/parentheses)
+          JOB_LOG=$(find workflow-logs/ -type f -iname "*$JOB_NAME*.txt" | head -1)
+          if [ -f "$JOB_LOG" ]; then
+            mkdir -p "workflow-logs/failed-matrix/$SAFE_JOB_NAME"
+            cp "$JOB_LOG" "workflow-logs/failed-matrix/$SAFE_JOB_NAME/failed-job-log.txt"
             OUTFILE="workflow-logs/failed-matrix/$SAFE_JOB_NAME/trimmed.txt"
-            if grep -i -E -A8 -B4 'FAILED|FAIL|AssertionError|Traceback|error|exception|exit code [1-9]|conclusion: failure' "workflow-logs/failed-matrix/$SAFE_JOB_NAME/failed-job-log.txt" | head -200 > "$OUTFILE"; then
+            if grep -i -E -A8 -B4 'FAILED|FAIL|AssertionError|Traceback|error|exception|exit code [1-9]|conclusion: failure' "$JOB_LOG" | head -200 > "$OUTFILE"; then
               echo "Extracted failure lines for $JOB_NAME"
             else
-              tail -200 "workflow-logs/failed-matrix/$SAFE_JOB_NAME/failed-job-log.txt" > "$OUTFILE"
+              tail -200 "$JOB_LOG" > "$OUTFILE"
             fi
-            # Redact secrets
             sed -i -E 's/(password|secret|token|key|api_key|auth)=[^[:space:]]+/***REDACTED***/gi' "$OUTFILE"
           else
-            echo "Failed to download log for $JOB_NAME"
+            echo "Failed to find log for $JOB_NAME"
           fi
         done
 
@@ -127,7 +110,6 @@ runs:
           echo -e "\n" >> "$FINAL_OUT"
         done
 
-        # Limit output to 30000 chars
         TRIMMED=$(head -c 30000 "$FINAL_OUT")
         echo "logs<<EOF" >> $GITHUB_OUTPUT
         echo "$TRIMMED" >> $GITHUB_OUTPUT
@@ -139,7 +121,7 @@ runs:
       env:
         OPENAI_API_KEY: ${{ inputs.openai_api_key }}
       run: |
-        RAW_LOGS=$(cat workflow-logs/failed-jobs-only.txt)
+        RAW_LOGS=$(cat workflow-logs/final-collated-failures.txt)
         echo "First lines of logs:"
         echo "$RAW_LOGS" | head -40
         dacp run workflow agents/github-actions-error-workflow.yaml \
@@ -171,7 +153,6 @@ runs:
       uses: 8398a7/action-slack@v3
       with:
         status: ${{ job.status }}
-        webhook_url: ${{ inputs.slack_webhook_url }}
         channel: ${{ inputs.slack_channel || '' }}
         text: |
           🤖 **GitHub Actions Error Analysis**
