@@ -77,13 +77,6 @@ runs:
         fi
         set -e
 
-    - name: Debug: Show downloaded log files
-      shell: bash
-      run: |
-        echo "Log files in workflow-logs:"
-        find workflow-logs -type f
-
-
     - name: Extract failed job logs (matrix and non-matrix safe)
       id: extract_failed
       shell: bash
