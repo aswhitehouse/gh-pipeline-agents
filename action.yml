@@ -164,6 +164,7 @@ runs:
 
     - name: Extract remediation details
       id: remediation
+      shell: bash
       run: |
         EXPLANATION=$(jq -r '.context.output.rationale' analysis-results.json)
         DIFF=$(jq -r '.context.output.proposed_diff' analysis-results.json)
