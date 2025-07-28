@@ -418,9 +418,9 @@ class GithubActionsErrorCollectorAgent(dacp.Agent):
 
             # Handle both Pydantic models and dictionaries
             if hasattr(result, 'model_dump'):
-                return json.dumps(result.model_dump())
+                return result.model_dump()
             else:
-                return json.dumps(result)
+                return result
 
         except TypeError as e:
             return {"error": f"Invalid parameters for task {task}: {str(e)}"}
