@@ -162,6 +162,22 @@ runs:
           workflow-logs/
         retention-days: 30
 
+    - name: Extract remediation details
+      id: remediation
+      run: |
+        EXPLANATION=$(jq -r '.context.output.rationale' analysis-results.json)
+        DIFF=$(jq -r '.context.output.proposed_diff' analysis-results.json)
+        # handle null values
+        if [ "$EXPLANATION" = "null" ]; then EXPLANATION="(No explanation)"; fi
+        if [ "$DIFF" = "null" ]; then DIFF="(No diff proposed)"; fi
+        # escape for Slack (triple backticks for code block)
+        echo "explanation<<EOF" >> $GITHUB_OUTPUT
+        echo "$EXPLANATION" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+        echo "diff<<EOF" >> $GITHUB_OUTPUT
+        echo "$DIFF" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
     - name: Send Slack notification
       if: always() && inputs.slack_webhook_url != ''
       uses: 8398a7/action-slack@v3
@@ -173,7 +189,16 @@ runs:
           📦 **Repository:** ${{ inputs.repository }}
           🔗 **Workflow Run:** ${{ inputs.workflow_run_id }}
           🌿 **Branch:** ${{ inputs.branch }}
-          See artifact for details!
+
+          *Remediation Explanation:*
+          ${{ steps.remediation.outputs.explanation }}
+
+          *Proposed Diff:*
+          ```
+          ${{ steps.remediation.outputs.diff }}
+          ```
+
           🔗 <https://github.com/${{ inputs.repository }}/actions/runs/${{ inputs.workflow_run_id }}|View Workflow Run>
       env:
         SLACK_WEBHOOK_URL: ${{ inputs.slack_webhook_url }}
+
