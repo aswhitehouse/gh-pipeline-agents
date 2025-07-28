@@ -57,11 +57,32 @@ runs:
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
-        set -e
         mkdir -p workflow-logs
         WORKFLOW_RUN_ID="${{ inputs.workflow_run_id }}"
         REPO="${{ inputs.repository }}"
+        set +e
         gh run download "$WORKFLOW_RUN_ID" --repo "$REPO" --dir workflow-logs/
+        STATUS=$?
+        if [ "$STATUS" -ne 0 ]; then
+          echo "⚠️ gh run download failed (exit code $STATUS)"
+          # Try API fallback
+          LOGS_URL="https://api.github.com/repos/$REPO/actions/runs/$WORKFLOW_RUN_ID/logs"
+          curl -L -H "Authorization: token $GH_TOKEN" "$LOGS_URL" -o workflow-logs/full-log.zip
+          if [ $? -eq 0 ] && [ -s workflow-logs/full-log.zip ]; then
+            unzip -o workflow-logs/full-log.zip -d workflow-logs/
+            echo "✅ API fallback log download and unzip worked"
+          else
+            echo "❌ API fallback also failed or returned empty log zip"
+          fi
+        fi
+        set -e
+
+    - name: Debug: Show downloaded log files
+      shell: bash
+      run: |
+        echo "Log files in workflow-logs:"
+        find workflow-logs -type f
+
 
     - name: Extract failed job logs (matrix and non-matrix safe)
       id: extract_failed
